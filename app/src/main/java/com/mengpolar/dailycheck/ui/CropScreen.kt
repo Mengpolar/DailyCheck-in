@@ -52,15 +52,25 @@ private val CropGold = Color(0xFFD8B36A)
 private val CropInk = Color(0xFFD9DEE8)
 private val CropDim = Color(0xFF7C8496)
 
-private fun decodeUri(context: android.content.Context, uri: Uri, maxSide: Int): Bitmap? = runCatching {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        ?: return null
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
-    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-}.getOrNull()
+private fun decodeUri(context: android.content.Context, uri: Uri, maxSide: Int): Bitmap? {
+    try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        android.util.Log.d("CropScreen", "bounds=${bounds.outWidth}x${bounds.outHeight} mime=${bounds.outMimeType}")
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        }
+        android.util.Log.d("CropScreen", "decoded=${bmp != null} size=${bmp?.width}x${bmp?.height}")
+        return bmp
+    } catch (t: Throwable) {
+        android.util.Log.e("CropScreen", "decodeUri failed", t)
+        return null
+    }
+}
 
 /**
  * 行星图片圆形裁剪：拖动/双指缩放，圆内区域保存为行星头像。

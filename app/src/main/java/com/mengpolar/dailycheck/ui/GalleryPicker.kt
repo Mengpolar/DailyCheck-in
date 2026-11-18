@@ -221,7 +221,10 @@ private fun GalleryThumb(uri: Uri, onPick: (Uri) -> Unit) {
             .padding(1.dp)
             .aspectRatio(1f)
             .clip(RoundedCornerShape(4.dp))
-            .clickable { onPick(uri) }
+            .clickable {
+                android.util.Log.d("CropScreen", "gallery picked uri=$uri")
+                onPick(uri)
+            }
     ) {
         val bmp = thumb
         if (bmp != null) {

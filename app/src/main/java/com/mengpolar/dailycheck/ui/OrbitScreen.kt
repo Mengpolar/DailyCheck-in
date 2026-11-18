@@ -130,8 +130,8 @@ private fun computeGeo(wPx: Float, hPx: Float, d: Float): Geo {
     radii[2] = maxOf(radii[2], radii[1] + 52f * s)
     val cap = minOf(capX, capY)
     if (radii[2] > cap) {
-        val sp = maxOf(26f * s, (cap - 72f * s) / 2f)
-        radii.clear(); radii.addAll(listOf(72f * s, 72f * s + sp, 72f * s + 2f * sp))
+        val sp = maxOf(26f * s, (cap - 90f * s) / 2f)
+        radii.clear(); radii.addAll(listOf(90f * s, 90f * s + sp, 90f * s + 2f * sp))
     }
     return Geo(wPx, hPx, wPx / 2f, hPx / 2f, q, radii, s)
 }
@@ -141,7 +141,7 @@ private fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 private class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
 private fun planetPos(g: Geo, t: OrbitTask, zf: Float = 1f): PlanetPos {
-    val a = planetAngle(t.frac)
+    val a = planetAngle(t.frac) + t.jitterDeg * Math.PI.toFloat() / 180f
     val R = g.radiiPx[t.ring] * zf
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
@@ -265,12 +265,13 @@ fun OrbitScreen(
         }
     }
 
-    // 点击星光：触摸处留下随机颜色的亮点，5 秒淡出
+    // 点击星光：触摸处留下随机颜色的四芒星光，5 秒淡出
     val sparks = remember { mutableStateListOf<Spark>() }
     val sparkRnd = remember { Random(System.nanoTime()) }
     val addSpark: (Float, Float) -> Unit = { x, y ->
-        sparks.removeAll { System.currentTimeMillis() - it.born > 5200 }
-        sparks.add(Spark(x, y, sparkRnd.nextInt(360), System.currentTimeMillis()))
+        val now = System.nanoTime() / 1_000_000L  // 与帧时钟同基准（uptime ms）
+        sparks.removeAll { now - it.born > 5200 }
+        sparks.add(Spark(x, y, sparkRnd.nextInt(360), sparkRnd.nextFloat(), now))
     }
 
     // 背景图（黑洞星云）：与星系画在同一个 Canvas 里，保证行星永远在背景之上
@@ -311,9 +312,11 @@ fun OrbitScreen(
                 .pointerInput(state.items, viewSize) {
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
+                        Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
                         val g = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
                         val tx = tap.x; val ty = tap.y
-                        addSpark(tap.x, tap.y)
+                        // 弧形导航区域内的 tap 交给弧自身处理，不生成星光
+                        if (tap.y < size.height - 62f * screenDensity) addSpark(tap.x, tap.y)
                         var best: OrbitTask? = null
                         var bd = 1e9f
                         state.items.forEach { t ->
@@ -438,10 +441,11 @@ private fun ArcNavBar(
     }
 
     val heightDp = 40.dp + 100.dp * progress
+    // 外层为触摸热区盒：比视觉月面高 64dp，弧上方的轻点/上滑也能命中
     Box(
         modifier
             .fillMaxWidth()
-            .height(heightDp)
+            .height(heightDp + 64.dp)
             .pointerInput(Unit) {
                 detectVerticalDragGestures { change, dragAmount ->
                     change.consume()
@@ -451,10 +455,19 @@ private fun ArcNavBar(
                 }
             }
             .pointerInput(Unit) {
-                detectTapGestures { target = if (anim.value > 0.5f) 0f else 1f }
+                detectTapGestures {
+                    Log.d("OrbitCanvas", "arc tapped, anim=${anim.value} -> ${if (anim.value > 0.5f) 0 else 1}")
+                    target = if (anim.value > 0.5f) 0f else 1f
+                }
             },
     ) {
-        Canvas(Modifier.fillMaxSize()) {
+        // 视觉月面带：对齐热区盒底部
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .height(heightDp)
+                .align(Alignment.BottomCenter)
+        ) {
             val d = this.density
             val w = size.width; val h = size.height
             // 弧度恒定的月面：曲线相对盒顶形状不变，整条弧随盒刚性上移（盒随屏底对齐）
@@ -519,24 +532,42 @@ private fun ArcNavBar(
     }
 }
 
-private data class Spark(val x: Float, val y: Float, val hue: Int, val born: Long)
+private data class Spark(
+    val x: Float, val y: Float,
+    val hue: Int, val seed: Float,
+    val born: Long, // uptime ms，与帧时钟同基准
+)
 
 private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long) {
     sparks.forEach { s ->
         val age = (timeMs - s.born).coerceAtLeast(0)
         if (age > 5000) return@forEach
-        val a = (1f - age / 5000f)
-        val tw = 0.7f + 0.3f * sin(age / 140f)
-        val alpha = (a * tw).coerceIn(0f, 1f)
+        val life = age / 5000f
+        val popIn = (age / 160f).coerceAtMost(1f)          // 出生 160ms 弹入
+        val alpha = ((1f - life) * (0.35f + 0.65f * popIn)).coerceIn(0f, 1f)
+        if (alpha <= 0.01f) return@forEach
+        val tw = 0.7f + 0.3f * sin(age / 110f + s.seed * 10f)
+        val base = (9f + 6f * s.seed) * g.s * (0.5f + 0.5f * popIn) * (1f - 0.35f * life)
+        val c = hsla(s.hue, 0.75f, 0.8f, 1f)
+        val center = Offset(s.x, s.y)
+        // 光晕
         drawCircle(
             Brush.radialGradient(
-                listOf(hsla(s.hue, 0.85f, 0.72f, 0.55f * alpha), Color.Black.copy(alpha = 0f)),
-                center = Offset(s.x, s.y),
-                radius = 11f * g.s,
+                listOf(c.copy(alpha = 0.5f * alpha * tw), Color.Black.copy(alpha = 0f)),
+                center = center, radius = base * 2.6f,
             ),
-            11f * g.s, Offset(s.x, s.y),
+            base * 2.6f, center,
         )
-        drawCircle(Color.White.copy(alpha = 0.9f * alpha), (1.8f + 0.8f * a) * g.s, Offset(s.x, s.y))
+        // 四芒射线（水平/垂直长，对角短）
+        val rayL = base * (1.1f + 0.5f * tw)
+        val rayS = base * 0.45f
+        val stroke = 1.4f * g.s
+        drawLine(c.copy(alpha = 0.9f * alpha), Offset(s.x - rayL, s.y), Offset(s.x + rayL, s.y), stroke)
+        drawLine(c.copy(alpha = 0.9f * alpha), Offset(s.x, s.y - rayL), Offset(s.x, s.y + rayL), stroke)
+        drawLine(c.copy(alpha = 0.55f * alpha), Offset(s.x - rayS, s.y - rayS), Offset(s.x + rayS, s.y + rayS), stroke * 0.8f)
+        drawLine(c.copy(alpha = 0.55f * alpha), Offset(s.x - rayS, s.y + rayS), Offset(s.x + rayS, s.y - rayS), stroke * 0.8f)
+        // 白核
+        drawCircle(Color.White.copy(alpha = alpha), (0.16f * base + 0.6f * g.s), center)
     }
 }
 
