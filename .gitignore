@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Android SDK 本地路径（每台机器不同，不入库）
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 杂项
+.DS_Store
+*.log

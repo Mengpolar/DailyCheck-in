@@ -1,0 +1,70 @@
+name: Release
+
+# 推送 v* 标签时自动构建 Release APK 并发布到 GitHub Releases
+# 也可以在 Actions 页面手动触发（workflow_dispatch），此时仅产出构建工件，不发布
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Compute version from tag
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          CORE="${VERSION%%-*}"
+          MAJOR="${CORE%%.*}"
+          REST="${CORE#*.}"
+          MINOR="${REST%%.*}"
+          PATCH="${REST#*.}"
+          [[ "$PATCH" == "$REST" ]] && PATCH=0
+          CODE=$((MAJOR*10000 + MINOR*100 + PATCH))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Building version=$VERSION code=$CODE"
+
+      - name: Build release APK
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_CODE: ${{ steps.ver.outputs.code }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk "DailyCheck-in-${{ steps.ver.outputs.version }}.apk"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DailyCheck-in-${{ steps.ver.outputs.version }}
+          path: DailyCheck-in-*.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DailyCheck-in-*.apk
+          generate_release_notes: true
+          make_latest: true
