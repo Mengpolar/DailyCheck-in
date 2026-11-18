@@ -107,7 +107,6 @@ private fun App() {
                     id = o.id,
                     name = o.name,
                     note = o.note,
-                    cycleType = o.cycleType,
                     intervalDays = o.intervalDays,
                     anchorMin = o.anchorMin,
                     cycleLabel = o.cycleLabel,
@@ -130,11 +129,11 @@ private fun App() {
                 if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
             },
             onDismiss = { showEditSheet = false },
-            onSave = { id, name, note, cycleType, intervalDays, anchorMin, image ->
+            onSave = { id, name, note, intervalDays, anchorMin, image ->
                 if (id == null) {
-                    taskVm.addTaskWithImage(name, note, cycleType, intervalDays, anchorMin, image)
+                    taskVm.addTask(name, note, intervalDays, anchorMin, image)
                 } else {
-                    taskVm.editTask(id, name, note, cycleType, intervalDays, anchorMin)
+                    taskVm.editTask(id, name, note, intervalDays, anchorMin)
                 }
                 pendingImage = null
                 showEditSheet = false

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.mengpolar.dailycheck.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ object UpdateManager {
     )
 
     private val json = Json { ignoreUnknownKeys = true }
+    private const val TAG = "UpdateFlow"
     private val client = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(30))
@@ -116,14 +118,16 @@ object UpdateManager {
         return Triple(part(0), part(1), part(2))
     }
 
-    /** 流式下载（单源） */
+    /** 流式下载（单源）；完成后校验 APK 魔数，防止镜像 200 返回错误页 */
     private suspend fun downloadFrom(url: String, dest: File, onProgress: (Float) -> Unit): File =
         withContext(Dispatchers.IO) {
+            Log.d(TAG, "download start: $url")
             dest.parentFile?.mkdirs()
             val tmp = File(dest.parentFile, dest.name + ".part")
             val req = Request.Builder().url(url).header("User-Agent", "DailyCheck-in-App").build()
             try {
                 client.newCall(req).execute().use { resp ->
+                    Log.d(TAG, "http ${resp.code} len=${resp.body?.contentLength()}")
                     if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
                     val body = resp.body ?: throw RuntimeException("下载内容为空")
                     val total = body.contentLength()
@@ -140,18 +144,33 @@ object UpdateManager {
                             }
                         }
                     }
+                    Log.d(TAG, "downloaded $read bytes (total=$total)")
                     if (total > 0 && read < total) throw RuntimeException("下载不完整")
+                }
+                if (!looksLikeApk(tmp)) {
+                    throw RuntimeException("内容校验失败（非 APK）")
                 }
                 if (!tmp.renameTo(dest)) {
                     tmp.copyTo(dest, overwrite = true)
                     tmp.delete()
                 }
+                Log.d(TAG, "saved: ${dest.absolutePath} (${dest.length()} bytes)")
                 dest
             } catch (e: Exception) {
+                Log.d(TAG, "download failed: ${e.message}")
                 tmp.delete()
                 throw e
             }
         }
+
+    private fun looksLikeApk(f: File): Boolean = runCatching {
+        if (f.length() < 500_000L) return false
+        java.io.RandomAccessFile(f, "r").use { raf ->
+            val b = ByteArray(2)
+            raf.readFully(b)
+            b[0] == 'P'.code.toByte() && b[1] == 'K'.code.toByte()
+        }
+    }.getOrDefault(false)
 
     /**
      * 多源容错下载：镜像逐一尝试（gh-proxy → ghfast → GitHub 直连）。

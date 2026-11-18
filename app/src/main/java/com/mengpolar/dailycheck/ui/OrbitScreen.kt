@@ -16,6 +16,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -68,8 +70,10 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -160,7 +164,6 @@ private val planetPaintGray = Paint().apply {
     isAntiAlias = true; isFilterBitmap = true
     colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f); postConcat(dimMatrix) })
 }
-private val bgPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
 
 @Composable
 fun OrbitScreen(
@@ -252,8 +255,7 @@ fun OrbitScreen(
         }
     }
 
-    // 背景图（黑洞星云，打包在 drawable-nodpi；加载失败时退回纯色）
-    val bgBitmap = remember { runCatching { BitmapFactory.decodeResource(context.resources, R.drawable.bg) }.getOrNull() }
+    // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
     val doCheck: (OrbitTask) -> Unit = { t ->
         val record = onCheck(t.id)
@@ -273,6 +275,18 @@ fun OrbitScreen(
             .background(Color(0xFF06070B))
             .onSizeChanged { viewSize = it }
     ) {
+        // 背景图（黑洞星云）：cover 铺满 + 半幅视差；其上由 Canvas 叠加暗角与星系
+        Image(
+            painter = painterResource(R.drawable.bg),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationX = parallax.x * density * 0.5f
+                    translationY = parallax.y * density * 0.5f
+                },
+        )
         Canvas(
             Modifier
                 .fillMaxSize()
@@ -297,22 +311,7 @@ fun OrbitScreen(
             val z = zoom.value
 
             scale(d, d) {
-                // 背景图 cover-crop 居中（视差偏移减半，保留暗角保证文字可读）
-                if (bgBitmap != null) {
-                    val bw = bgBitmap.width.toFloat(); val bh = bgBitmap.height.toFloat()
-                    val cover = maxOf(g.w / bw, g.h / bh) * 1.05f
-                    val dw = bw * cover; val dh = bh * cover
-                    val left = (g.w - dw) / 2f - parallax.x * 0.5f
-                    val top = (g.h - dh) / 2f - parallax.y * 0.5f
-                    drawContext.canvas.nativeCanvas.drawBitmap(
-                        bgBitmap, null,
-                        RectF(left, top, left + dw, top + dh),
-                        bgPaint,
-                    )
-                } else {
-                    drawRect(Color(0xFF06070B), size = Size(g.w, g.h))
-                }
-                // 暗角：边缘压暗，突出中心星系与文字
+                // 暗角：边缘压暗，突出中心星系与文字（背景图之上）
                 drawRect(
                     Brush.radialGradient(
                         listOf(Color(0x2206070B), Color(0x96000000)),
@@ -334,11 +333,11 @@ fun OrbitScreen(
             }
         }
 
-        // 顶部：日期 + 入口
+        // 顶部：日期 + 入口（锚定顶部，宽随屏）
         Row(
             Modifier
                 .align(Alignment.TopStart)
-                .fillMaxSize()
+                .fillMaxWidth()
                 .padding(start = 20.dp, top = 14.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

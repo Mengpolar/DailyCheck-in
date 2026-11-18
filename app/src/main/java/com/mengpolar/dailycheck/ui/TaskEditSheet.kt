@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -36,7 +36,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mengpolar.dailycheck.data.CycleType
 import com.mengpolar.dailycheck.data.TaskUi
 
 private val SheetGold = Color(0xFFD8B36A)
@@ -52,14 +51,13 @@ fun TaskEditSheet(
     onPickImage: () -> Unit,
     onRemoveImage: () -> Unit,
     onDismiss: () -> Unit,
-    onSave: (id: Long?, name: String, note: String, cycleType: CycleType, intervalDays: Int, anchorMin: Int, image: Bitmap?) -> Unit,
+    onSave: (id: Long?, name: String, note: String, intervalDays: Int, anchorMin: Int, image: Bitmap?) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
-    var type by remember { mutableStateOf(initial?.cycleType ?: CycleType.DAILY) }
     var intervalText by remember {
-        mutableStateOf(initial?.intervalDays?.takeIf { it > 0 }?.toString() ?: "3")
+        mutableStateOf(initial?.intervalDays?.takeIf { it > 0 }?.toString() ?: "1")
     }
     var anchorText by remember {
         mutableStateOf(
@@ -72,9 +70,7 @@ fun TaskEditSheet(
         val m = parts.getOrNull(1)?.trim()?.toIntOrNull()
         if (h != null && m != null && h in 0..23 && m in 0..59) h * 60 + m else null
     }
-    val canSave = name.isNotBlank() &&
-        (type != CycleType.EVERY_N_DAYS || (interval ?: 0) >= 1) &&
-        (type != CycleType.DAILY || anchorMin != null)
+    val canSave = name.isNotBlank() && (interval ?: 0) >= 1 && anchorMin != null
     val hasPlanetImage = imageSet || pendingImage != null
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -100,45 +96,36 @@ fun TaskEditSheet(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("重复周期", fontSize = 12.sp, color = SheetDim, fontFamily = FontFamily.Monospace)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val options = listOf(
-                        "每天" to CycleType.DAILY,
-                        "每周" to CycleType.WEEKLY,
-                        "每月" to CycleType.MONTHLY,
-                        "每 N 天" to CycleType.EVERY_N_DAYS,
-                    )
-                    options.forEach { (label, t) ->
+                    listOf("每天" to 1, "每周" to 7, "每月" to 30).forEach { (label, n) ->
                         FilterChip(
-                            selected = type == t,
-                            onClick = { type = t },
+                            selected = interval == n,
+                            onClick = { intervalText = n.toString() },
                             label = { Text(label) },
                             modifier = Modifier.weight(1f),
                         )
                     }
                 }
-            }
-            if (type == CycleType.DAILY) {
-                OutlinedTextField(
-                    value = anchorText,
-                    onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
-                    label = { Text("起始时刻（起始线）") },
-                    supportingText = { Text("行星每天从此刻出发，如 05:30、20:00") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    isError = anchorMin == null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            if (type == CycleType.EVERY_N_DAYS) {
                 OutlinedTextField(
                     value = intervalText,
                     onValueChange = { intervalText = it.filter { c -> c.isDigit() }.take(3) },
-                    label = { Text("间隔天数") },
-                    supportingText = { Text("完成一次后，隔 N 天再次待打卡；锚点为上次打卡时刻") },
+                    label = { Text("每 N 天") },
+                    supportingText = { Text("填 1 即每天，填 7 即每周；周期网格从创建日起算") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
+                    isError = interval == null || (interval ?: 0) < 1,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            OutlinedTextField(
+                value = anchorText,
+                onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
+                label = { Text("起始时刻（起始线）") },
+                supportingText = { Text("每周期以该时刻为始末，如 05:30、20:00；行星此刻沿轨道出发") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                isError = anchorMin == null,
+                modifier = Modifier.fillMaxWidth(),
+            )
             OutlinedTextField(
                 value = note,
                 onValueChange = { note = it },
@@ -170,7 +157,7 @@ fun TaskEditSheet(
             }
 
             Button(
-                onClick = { onSave(initial?.id, name.trim(), note.trim(), type, interval ?: 1, anchorMin ?: 0, pendingImage) },
+                onClick = { onSave(initial?.id, name.trim(), note.trim(), interval ?: 1, anchorMin ?: 0, pendingImage) },
                 enabled = canSave,
                 modifier = Modifier
                     .fillMaxWidth()

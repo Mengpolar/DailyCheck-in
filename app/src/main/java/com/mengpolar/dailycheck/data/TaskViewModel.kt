@@ -22,13 +22,12 @@ data class OrbitTask(
     val id: Long,
     val name: String,
     val note: String,
-    val cycleType: CycleType,
     val intervalDays: Int,
     val anchorMin: Int,
     val cycleLabel: String,
     val anchorLabel: String,
     val state: PlanetState,
-    /** 周期进度 0..1（每 N 天逾期后会绕圈取模） */
+    /** 周期进度 0..1 */
     val frac: Float,
     /** 彗尾长度 0..1（打卡后随时间淡出） */
     val tail: Float,
@@ -55,7 +54,6 @@ data class TaskUi(
     val id: Long,
     val name: String,
     val note: String,
-    val cycleType: CycleType,
     val intervalDays: Int,
     val anchorMin: Int,
     val cycleLabel: String,
@@ -80,7 +78,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     private val detailTaskId = MutableStateFlow<Long?>(null)
 
     init {
-        // 定期刷新：跨天/跨周期边界时自动更新行星状态
+        // 定期刷新：跨周期边界时自动更新行星状态
         viewModelScope.launch {
             while (true) {
                 delay(30_000)
@@ -103,13 +101,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun nextText(t: Task, state: PlanetState): String = when (state) {
-        PlanetState.DONE -> when (t.cycleType) {
-            CycleType.DAILY -> "下次 明 %02d:%02d".format(t.anchorMin / 60, t.anchorMin % 60)
-            CycleType.WEEKLY -> "下次 下周一"
-            CycleType.MONTHLY -> "下次 下月 1 日"
-            CycleType.EVERY_N_DAYS -> "下次 ${t.intervalDays} 天后"
-        }
+    private fun nextText(t: Task, state: PlanetState, nowMs: Long): String = when (state) {
+        PlanetState.DONE -> "下次 ${formatWindowStart(t.periodWindow(nowMs).endMs)}"
         PlanetState.LATE -> "打卡后重新点亮"
         PlanetState.NEAR -> "即将到期 · 若隐若现"
         PlanetState.PENDING -> "周期内任意时间可打卡"
@@ -120,39 +113,31 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         return palette[(name.hashCode().let { if (it < 0) it * -1 else it }) % palette.size]
     }
 
-    private fun ringOf(t: Task): Int = when (t.cycleType) {
-        CycleType.DAILY -> 0
-        CycleType.WEEKLY, CycleType.EVERY_N_DAYS -> 1
-        CycleType.MONTHLY -> 2
-    }
-
     private fun computeOrbit(d: AppData, nowMs: Long): OrbitUiState {
         val today = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
         val items = d.tasks.map { task ->
             val lastMs = lastCheckMs(d, task.id)
             val state = task.planetState(nowMs, lastMs)
-            val (frac, overdueLap) = task.periodFraction(nowMs, lastMs)
             val done = state == PlanetState.DONE
             val records = d.records.filter { it.taskId == task.id }
             val tail = if (done && lastMs != null) {
-                val w = task.periodWindow(nowMs, lastMs)
+                val w = task.periodWindow(nowMs)
                 (1f - ((nowMs - lastMs).toFloat() / w.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
             } else 0f
             OrbitTask(
                 id = task.id,
                 name = task.name,
                 note = task.note,
-                cycleType = task.cycleType,
                 intervalDays = task.intervalDays,
                 anchorMin = task.anchorMin,
                 cycleLabel = task.cycleLabel(),
                 anchorLabel = task.anchorLabel(),
                 state = state,
-                frac = frac,
+                frac = task.periodFraction(nowMs),
                 tail = tail,
                 hue = hueOf(task.name),
-                ring = ringOf(task),
-                nextText = nextText(task, state),
+                ring = task.orbitRing(),
+                nextText = nextText(task, state, nowMs),
                 circleNo = records.size + 1,
                 lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
                 recordCount = records.size,
@@ -189,7 +174,6 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     id = task.id,
                     name = task.name,
                     note = task.note,
-                    cycleType = task.cycleType,
                     intervalDays = task.intervalDays,
                     anchorMin = task.anchorMin,
                     cycleLabel = task.cycleLabel(),
@@ -214,25 +198,21 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addTask(
-        name: String, note: String, cycleType: CycleType,
+        name: String, note: String,
         intervalDays: Int, anchorMin: Int, image: Bitmap?,
     ) {
-        repo.addTask(name, note, cycleType, intervalDays, anchorMin, image)
+        repo.addTask(name, note, intervalDays, anchorMin, image)
         refresh()
     }
 
-    fun editTask(
-        id: Long, name: String, note: String, cycleType: CycleType,
-        intervalDays: Int, anchorMin: Int,
-    ) {
+    fun editTask(id: Long, name: String, note: String, intervalDays: Int, anchorMin: Int) {
         val existing = dataFlow.value.tasks.firstOrNull { it.id == id } ?: return
         repo.updateTask(
             existing.copy(
                 name = name.trim(),
                 note = note.trim(),
-                cycleType = cycleType,
-                intervalDays = if (cycleType == CycleType.EVERY_N_DAYS) intervalDays.coerceAtLeast(1) else 1,
-                anchorMin = if (cycleType == CycleType.DAILY) anchorMin.coerceIn(0, 1439) else 0,
+                intervalDays = intervalDays.coerceAtLeast(1),
+                anchorMin = anchorMin.coerceIn(0, 1439),
             )
         )
         refresh()
@@ -242,12 +222,6 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         repo.setPlanetImage(id, image)
         refresh()
     }
-
-    /** 新建流程中暂存的图片，插入任务后落盘 */
-    fun addTaskWithImage(
-        name: String, note: String, cycleType: CycleType,
-        intervalDays: Int, anchorMin: Int, image: Bitmap?,
-    ) = addTask(name, note, cycleType, intervalDays, anchorMin, image)
 
     fun deleteTask(id: Long) {
         repo.deleteTask(id)

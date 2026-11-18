@@ -80,7 +80,8 @@ fun UpdateDialogs(vm: UpdateViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            "已下载 ${(s.progress * 100).toInt()}%（多源容错：gh-proxy → ghfast → 直连）",
+                            if (s.progress >= 0.995f) "已下载 100% · 校验中…"
+                            else "已下载 ${(s.progress * 100).toInt()}%（多源容错下载）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp),

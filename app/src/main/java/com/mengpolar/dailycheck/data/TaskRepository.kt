@@ -3,6 +3,9 @@ package com.mengpolar.dailycheck.data
 import android.content.Context
 import android.graphics.Bitmap
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.time.LocalDate
 
@@ -24,13 +27,39 @@ class TaskRepository private constructor(private val context: Context) {
     private fun load() {
         if (!file.exists()) return
         try {
-            data = json.decodeFromString(AppData.serializer(), file.readText())
+            data = json.decodeFromString(AppData.serializer(), migrateLegacy(file.readText()))
         } catch (e: Exception) {
             // 数据损坏时备份原文件并重新开始，避免崩溃循环
             runCatching { file.copyTo(File(file.parentFile, "dailycheck_data_backup.json"), overwrite = true) }
             data = AppData()
         }
     }
+
+    /**
+     * 旧版（v0.0.4 及以前）使用 cycleType 枚举；统一为「每 N 天 + 起始时刻」后，
+     * 读取时把 WEEKLY→7、MONTHLY→30、DAILY→1 平滑迁移，旧字段丢弃。
+     */
+    private fun migrateLegacy(text: String): String = runCatching {
+        val obj = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
+        val tasks = obj["tasks"]?.jsonArray ?: return text
+        val migrated = tasks.map { el ->
+            val t = el.jsonObject.toMutableMap()
+            val cycle = (t["cycleType"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            if (cycle != null) {
+                when (cycle) {
+                    "WEEKLY" -> t["intervalDays"] = kotlinx.serialization.json.JsonPrimitive(7)
+                    "MONTHLY" -> t["intervalDays"] = kotlinx.serialization.json.JsonPrimitive(30)
+                    "DAILY" -> t["intervalDays"] = kotlinx.serialization.json.JsonPrimitive(1)
+                    else -> Unit // EVERY_N_DAYS：沿用其自身 intervalDays
+                }
+                t.remove("cycleType")
+            }
+            kotlinx.serialization.json.JsonObject(t)
+        }
+        val out = obj.toMutableMap()
+        out["tasks"] = kotlinx.serialization.json.JsonArray(migrated)
+        kotlinx.serialization.json.JsonObject(out).toString()
+    }.getOrDefault(text)
 
     private fun persist() {
         runCatching {
@@ -46,16 +75,15 @@ class TaskRepository private constructor(private val context: Context) {
     fun snapshot(): AppData = synchronized(lock) { data }
 
     fun addTask(
-        name: String, note: String, cycleType: CycleType,
+        name: String, note: String,
         intervalDays: Int, anchorMin: Int, image: Bitmap?,
     ): Task = synchronized(lock) {
         val task = Task(
             id = data.nextTaskId,
             name = name.trim(),
             note = note.trim(),
-            cycleType = cycleType,
-            intervalDays = if (cycleType == CycleType.EVERY_N_DAYS) intervalDays.coerceAtLeast(1) else 1,
-            anchorMin = if (cycleType == CycleType.DAILY) anchorMin.coerceIn(0, 1439) else 0,
+            intervalDays = intervalDays.coerceAtLeast(1),
+            anchorMin = anchorMin.coerceIn(0, 1439),
             createdEpochDay = LocalDate.now().toEpochDay(),
         )
         data = data.copy(tasks = data.tasks + task, nextTaskId = data.nextTaskId + 1)
