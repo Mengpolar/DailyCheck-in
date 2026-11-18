@@ -8,6 +8,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import com.mengpolar.dailycheck.R
 import android.hardware.Sensor
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
@@ -159,6 +160,7 @@ private val planetPaintGray = Paint().apply {
     isAntiAlias = true; isFilterBitmap = true
     colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f); postConcat(dimMatrix) })
 }
+private val bgPaint = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
 
 @Composable
 fun OrbitScreen(
@@ -250,6 +252,9 @@ fun OrbitScreen(
         }
     }
 
+    // 背景图（黑洞星云，打包在 drawable-nodpi；加载失败时退回纯色）
+    val bgBitmap = remember { runCatching { BitmapFactory.decodeResource(context.resources, R.drawable.bg) }.getOrNull() }
+
     val doCheck: (OrbitTask) -> Unit = { t ->
         val record = onCheck(t.id)
         scope.launch {
@@ -292,11 +297,25 @@ fun OrbitScreen(
             val z = zoom.value
 
             scale(d, d) {
-                // 背景 + 暗角
-                drawRect(Color(0xFF06070B), size = Size(g.w, g.h))
+                // 背景图 cover-crop 居中（视差偏移减半，保留暗角保证文字可读）
+                if (bgBitmap != null) {
+                    val bw = bgBitmap.width.toFloat(); val bh = bgBitmap.height.toFloat()
+                    val cover = maxOf(g.w / bw, g.h / bh) * 1.05f
+                    val dw = bw * cover; val dh = bh * cover
+                    val left = (g.w - dw) / 2f - parallax.x * 0.5f
+                    val top = (g.h - dh) / 2f - parallax.y * 0.5f
+                    drawContext.canvas.nativeCanvas.drawBitmap(
+                        bgBitmap, null,
+                        RectF(left, top, left + dw, top + dh),
+                        bgPaint,
+                    )
+                } else {
+                    drawRect(Color(0xFF06070B), size = Size(g.w, g.h))
+                }
+                // 暗角：边缘压暗，突出中心星系与文字
                 drawRect(
                     Brush.radialGradient(
-                        listOf(Color(0x590E111A), Color(0x80000000)),
+                        listOf(Color(0x2206070B), Color(0x96000000)),
                         center = Offset(g.cx, g.cy),
                         radius = maxOf(g.w, g.h) * 0.72f,
                     ),

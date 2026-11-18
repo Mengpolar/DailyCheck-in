@@ -81,7 +81,7 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
         downloadJob = viewModelScope.launch {
             try {
                 val file = UpdateManager.apkFile(getApplication(), release.version)
-                UpdateManager.downloadApk(release.proxiedApkUrl, file) { p ->
+                UpdateManager.downloadApk(release.apkUrl, file) { p ->
                     _state.value = UpdateState.Downloading(release, p)
                 }
                 _state.value = UpdateState.Ready(release, file)

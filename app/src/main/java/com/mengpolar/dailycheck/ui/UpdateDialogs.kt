@@ -74,7 +74,7 @@ fun UpdateDialogs(vm: UpdateViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            "已下载 ${(s.progress * 100).toInt()}%（经 gh-proxy.org 加速）",
+                            "已下载 ${(s.progress * 100).toInt()}%（多源容错：gh-proxy → ghfast → 直连）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 8.dp),

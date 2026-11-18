@@ -28,6 +28,13 @@ object UpdateManager {
     /** 下载加速代理：拼接在 GitHub 文件原始地址前即可 */
     const val PROXY_PREFIX = "https://gh-proxy.org/"
 
+    /** 下载源候选（镜像前缀，空串 = GitHub 直连），按顺序逐一尝试 */
+    val DOWNLOAD_MIRRORS = listOf(
+        "https://gh-proxy.org/",
+        "https://ghfast.top/",
+        "",
+    )
+
     private val json = Json { ignoreUnknownKeys = true }
     private val client = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(15))
@@ -104,15 +111,15 @@ object UpdateManager {
         return Triple(part(0), part(1), part(2))
     }
 
-    /** 流式下载 APK（带进度回调），失败时清理临时文件 */
-    suspend fun downloadApk(url: String, dest: File, onProgress: (Float) -> Unit): File =
+    /** 流式下载（单源） */
+    private suspend fun downloadFrom(url: String, dest: File, onProgress: (Float) -> Unit): File =
         withContext(Dispatchers.IO) {
             dest.parentFile?.mkdirs()
             val tmp = File(dest.parentFile, dest.name + ".part")
             val req = Request.Builder().url(url).header("User-Agent", "DailyCheck-in-App").build()
             try {
                 client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) throw RuntimeException("下载失败 (HTTP ${resp.code})")
+                    if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
                     val body = resp.body ?: throw RuntimeException("下载内容为空")
                     val total = body.contentLength()
                     var read = 0L
@@ -139,6 +146,29 @@ object UpdateManager {
                 tmp.delete()
                 throw e
             }
+        }
+
+    /**
+     * 多源容错下载：镜像逐一尝试（gh-proxy → ghfast → GitHub 直连）。
+     * 任一源成功即返回；全部失败时抛出含各源信息异常。
+     */
+    suspend fun downloadApk(url: String, dest: File, onProgress: (Float) -> Unit): File =
+        withContext(Dispatchers.IO) {
+            var lastErr: Exception? = null
+            DOWNLOAD_MIRRORS.forEachIndexed { i, prefix ->
+                try {
+                    return@withContext downloadFrom(prefix + url, dest, onProgress)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastErr = e
+                    onProgress(0f)  // 重置进度，尝试下一源
+                }
+            }
+            throw RuntimeException(
+                "全部下载源均失败（gh-proxy / ghfast / 直连），最后错误：${lastErr?.message ?: "未知"}",
+                lastErr,
+            )
         }
 
     /** 调起系统安装器；返回 false 表示缺少“安装未知应用”权限 */
