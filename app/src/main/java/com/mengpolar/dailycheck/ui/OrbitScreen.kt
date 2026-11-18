@@ -13,10 +13,10 @@ import android.hardware.Sensor
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -65,7 +65,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
@@ -74,11 +76,10 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -268,6 +269,13 @@ fun OrbitScreen(
         sparks.add(Spark(x, y, sparkRnd.nextInt(360), System.currentTimeMillis()))
     }
 
+    // 背景图（黑洞星云）：与星系画在同一个 Canvas 里，保证行星永远在背景之上
+    val bgImage = remember {
+        runCatching {
+            BitmapFactory.decodeResource(context.resources, R.drawable.bg)?.asImageBitmap()
+        }.getOrNull()
+    }
+
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
     val doCheck: (OrbitTask) -> Unit = { t ->
@@ -288,18 +296,6 @@ fun OrbitScreen(
             .background(Color(0xFF06070B))
             .onSizeChanged { viewSize = it }
     ) {
-        // 背景图（黑洞星云）：cover 铺满 + 半幅视差；其上由 Canvas 叠加暗角与星系
-        Image(
-            painter = painterResource(R.drawable.bg),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    translationX = parallax.x * density
-                    translationY = parallax.y * density
-                },
-        )
         Canvas(
             Modifier
                 .fillMaxSize()
@@ -325,7 +321,27 @@ fun OrbitScreen(
             val z = zoom.value
 
             scale(d, d) {
-                // 暗角：边缘压暗，突出中心星系与文字（背景图之上）
+                // 背景图（cover + 视差，与星系同一画布，行星永远在背景之上）
+                val bg = bgImage
+                if (bg != null) {
+                    val bw = bg.width.toFloat(); val bh = bg.height.toFloat()
+                    val cover = maxOf(g.w / bw, g.h / bh) * 1.16f
+                    val dw = bw * cover; val dh = bh * cover
+                    val marginX = (dw - g.w) / 2f; val marginY = (dh - g.h) / 2f
+                    val left = (g.w - dw) / 2f - parallax.x.coerceIn(-marginX, marginX)
+                    val top = (g.h - dh) / 2f - parallax.y.coerceIn(-marginY, marginY)
+                    drawImage(
+                        bg,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(bg.width, bg.height),
+                        dstOffset = IntOffset(left.toInt(), top.toInt()),
+                        dstSize = IntSize(dw.toInt(), dh.toInt()),
+                        filterQuality = FilterQuality.Medium,
+                    )
+                } else {
+                    drawRect(Color(0xFF06070B), size = Size(g.w, g.h))
+                }
+                // 暗角：边缘压暗，突出中心星系与文字
                 drawRect(
                     Brush.radialGradient(
                         listOf(Color(0x2206070B), Color(0x96000000)),
@@ -377,14 +393,23 @@ fun OrbitScreen(
     }
 }
 
-/** 底部弧形导航：月球表面形态的弧形地平线；默认只露月面，升起后带出按钮，轻点切换 */
+/** 底部弧形导航：月球表面形态的弧形地平线，向上凸起；整条弧带动画升降，升起后带出按钮 */
 @Composable
 private fun ArcNavBar(
     onAdd: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var progress by remember { mutableFloatStateOf(0f) }
+    val anim = remember { Animatable(0f) }
+    var target by remember { mutableFloatStateOf(0f) }
+    val scope = rememberCoroutineScope()
+    val progress = anim.value
+
+    // 轻点切换：整体动画升起 / 收起
+    LaunchedEffect(target) {
+        anim.animateTo(target, tween(450, easing = FastOutSlowInEasing))
+    }
+
     val heightDp = 40.dp + 100.dp * progress
     Box(
         modifier
@@ -393,18 +418,20 @@ private fun ArcNavBar(
             .pointerInput(Unit) {
                 detectVerticalDragGestures { change, dragAmount ->
                     change.consume()
-                    progress = (progress - dragAmount / 240f).coerceIn(0f, 1f)
+                    val next = (anim.value - dragAmount / 240f).coerceIn(0f, 1f)
+                    target = next
+                    scope.launch { anim.snapTo(next) } // 拖动跟手
                 }
             }
             .pointerInput(Unit) {
-                detectTapGestures { progress = if (progress > 0.5f) 0f else 1f }
+                detectTapGestures { target = if (anim.value > 0.5f) 0f else 1f }
             },
     ) {
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width; val h = size.height
             val edgeY = h - h * 0.35f
             val apexY = h - h * (0.62f + 0.38f * progress)
-            val ctrlY = h - 2f * apexY + edgeY
+            val ctrlY = 2f * apexY - edgeY  // 二次曲线中点公式：保证中点恰为 apex，弧形向上凸
             val curve = Path().apply {
                 moveTo(0f, edgeY)
                 quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
@@ -434,17 +461,17 @@ private fun ArcNavBar(
                 style = Stroke(5f),
             )
             drawPath(curve, Color(0x99E8ECF4), style = Stroke(1.2f))
-            // 陨石坑（沿曲线均匀分布，位置由参数决定）
-            val craters = listOf(0.14f, 0.30f, 0.5f, 0.70f, 0.86f)
-            craters.forEachIndexed { i, t0 ->
+            // 陨石坑（沿曲线均匀分布）
+            listOf(0.14f, 0.30f, 0.5f, 0.70f, 0.86f).forEachIndexed { i, t0 ->
                 val mt = 1f - t0
-                val cx = mt * mt * 0f + 2f * mt * t0 * (w / 2f) + t0 * t0 * w
+                val cx = 2f * mt * t0 * (w / 2f) + t0 * t0 * w
                 val cy = mt * mt * edgeY + 2f * mt * t0 * ctrlY + t0 * t0 * edgeY
                 val cr = (3.5f + (i % 3) * 2.2f) * (1f + 0.4f * progress)
                 drawCircle(Color(0x66222A35), cr, Offset(cx, cy + cr * 0.4f))
                 drawCircle(Color(0x4D5A6478), cr, Offset(cx, cy + cr * 0.4f), style = Stroke(1f))
             }
         }
+        val clickable = progress > 0.5f
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -452,10 +479,10 @@ private fun ArcNavBar(
                 .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
             horizontalArrangement = Arrangement.spacedBy(64.dp),
         ) {
-            IconButton(onClick = onAdd) {
+            IconButton(onClick = onAdd, enabled = clickable) {
                 Icon(Icons.Rounded.Add, "添加任务", tint = GoldColor)
             }
-            IconButton(onClick = onOpenSettings) {
+            IconButton(onClick = onOpenSettings, enabled = clickable) {
                 Icon(Icons.Rounded.Settings, "设置", tint = DimColor)
             }
         }
