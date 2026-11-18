@@ -9,8 +9,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -29,6 +27,7 @@ import com.mengpolar.dailycheck.data.CheckRecord
 import com.mengpolar.dailycheck.data.TaskUi
 import com.mengpolar.dailycheck.data.TaskViewModel
 import com.mengpolar.dailycheck.ui.CropScreen
+import com.mengpolar.dailycheck.ui.GalleryPickerDialog
 import com.mengpolar.dailycheck.ui.OrbitScreen
 import com.mengpolar.dailycheck.ui.SettingsScreen
 import com.mengpolar.dailycheck.ui.TaskDetailScreen
@@ -63,10 +62,9 @@ private fun App() {
     var editTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
     var pendingImage by remember { mutableStateOf<Bitmap?>(null) } // 新建流程暂存的行星图
     var cropUri by remember { mutableStateOf<Uri?>(null) }
+    var showGallery by remember { mutableStateOf(false) }
 
-    val pickImage = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) cropUri = uri }
+    val pickImage: () -> Unit = { showGallery = true }
 
     // 启动时静默检查更新
     LaunchedEffect(Unit) { updateVm.autoCheckOnLaunch() }
@@ -147,9 +145,7 @@ private fun App() {
             pendingImage = pendingImage,
             imageSet = initial?.hasImage == true,
             existingPreview = existingPreview,
-            onPickImage = {
-                pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
+            onPickImage = pickImage,
             onRemoveImage = {
                 val id = editTaskId
                 if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
@@ -164,6 +160,16 @@ private fun App() {
                 pendingImage = null
                 showEditSheet = false
             },
+        )
+    }
+
+    if (showGallery) {
+        GalleryPickerDialog(
+            onPick = { uri ->
+                showGallery = false
+                cropUri = uri
+            },
+            onDismiss = { showGallery = false },
         )
     }
 

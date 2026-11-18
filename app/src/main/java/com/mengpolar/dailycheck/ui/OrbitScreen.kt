@@ -139,7 +139,7 @@ private fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
-    val pr = (if (t.ring == 0) 16f else if (t.ring == 1) 18f else 20f) * (0.72f + 0.5f * nearness)
+    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * (0.85f + 0.35f * nearness)
     return PlanetPos(x, y, nearness, pr)
 }
 
@@ -158,9 +158,9 @@ private val anchorPaint = Paint().apply {
     setShadowLayer(4f, 0f, 1f, 0xE604060C.toInt())
 }
 private val dimMatrix = ColorMatrix(floatArrayOf(
-    0.8f, 0f, 0f, 0f, 0f,
-    0f, 0.8f, 0f, 0f, 0f,
-    0f, 0f, 0.8f, 0f, 0f,
+    0.88f, 0f, 0f, 0f, 0f,
+    0f, 0.88f, 0f, 0f, 0f,
+    0f, 0f, 0.88f, 0f, 0f,
     0f, 0f, 0f, 1f, 0f,
 ))
 private val planetPaintNormal = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
@@ -206,8 +206,8 @@ fun OrbitScreen(
             private var sx = 0f; private var sy = 0f
             override fun onSensorChanged(e: android.hardware.SensorEvent) {
                 // 竖屏持机：gx 随左右倾斜变化；gy≈9.8 为基准，上下倾斜取差值
-                val tx = (-(e.values[0]) / 9.8f).coerceIn(-1f, 1f) * 22f
-                val ty = ((e.values[1]) / 9.8f - 1f).coerceIn(-1f, 1f) * 14f
+                val tx = (-(e.values[0]) / 9.8f).coerceIn(-1f, 1f) * 30f
+                val ty = ((e.values[1]) / 9.8f - 1f).coerceIn(-1f, 1f) * 18f
                 sx = sx * 0.85f + tx * 0.15f
                 sy = sy * 0.85f + ty * 0.15f
                 parallax = Offset(sx, sy)
@@ -296,8 +296,8 @@ fun OrbitScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationX = parallax.x * density * 0.5f
-                    translationY = parallax.y * density * 0.5f
+                    translationX = parallax.x * density
+                    translationY = parallax.y * density
                 },
         )
         Canvas(
@@ -334,7 +334,7 @@ fun OrbitScreen(
                     ),
                     size = Size(g.w, g.h),
                 )
-                drawStars(g, stars, timeMs, parallax, 1f - 0.3f * z)
+                drawStars(g, stars, timeMs, Offset(parallax.x * 1.3f, parallax.y * 1.3f), 1f - 0.3f * z)
 
                 // 星系层：视差 + 聚焦缩放
                 scale(1f + 0.05f * z, 1f + 0.05f * z, pivot = Offset(g.cx, g.cy)) {
@@ -377,7 +377,7 @@ fun OrbitScreen(
     }
 }
 
-/** 底部弧形导航：屏幕宽的弧形，占位很小；上滑升起带出按钮，下滑收起，轻点切换 */
+/** 底部弧形导航：月球表面形态的弧形地平线；默认只露月面，升起后带出按钮，轻点切换 */
 @Composable
 private fun ArcNavBar(
     onAdd: () -> Unit,
@@ -385,7 +385,7 @@ private fun ArcNavBar(
     modifier: Modifier = Modifier,
 ) {
     var progress by remember { mutableFloatStateOf(0f) }
-    val heightDp = 38.dp + 104.dp * progress
+    val heightDp = 40.dp + 100.dp * progress
     Box(
         modifier
             .fillMaxWidth()
@@ -403,8 +403,13 @@ private fun ArcNavBar(
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width; val h = size.height
             val edgeY = h - h * 0.35f
-            val apexY = h - h * (0.55f + 0.45f * progress)
+            val apexY = h - h * (0.62f + 0.38f * progress)
             val ctrlY = h - 2f * apexY + edgeY
+            val curve = Path().apply {
+                moveTo(0f, edgeY)
+                quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
+            }
+            // 月面：灰色渐变带
             val band = Path().apply {
                 moveTo(0f, h)
                 lineTo(0f, edgeY)
@@ -412,21 +417,39 @@ private fun ArcNavBar(
                 lineTo(w, h)
                 close()
             }
-            drawPath(band, Color(0xB8080A10))
             drawPath(
-                Path().apply {
-                    moveTo(0f, edgeY)
-                    quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
-                },
-                Color(0x33D8DEEE),
-                style = Stroke(1f),
+                band,
+                Brush.verticalGradient(
+                    listOf(Color(0xFF3E4552), Color(0xFF1A1F28), Color(0xFF0D1016)),
+                    startY = edgeY, endY = h,
+                ),
             )
+            // 月面边缘光（晕 + 亮线）
+            drawPath(
+                curve,
+                Brush.horizontalGradient(
+                    listOf(Color(0x1FD8DEEE), Color(0x59E8ECF4), Color(0x1FD8DEEE)),
+                    startX = 0f, endX = w,
+                ),
+                style = Stroke(5f),
+            )
+            drawPath(curve, Color(0x99E8ECF4), style = Stroke(1.2f))
+            // 陨石坑（沿曲线均匀分布，位置由参数决定）
+            val craters = listOf(0.14f, 0.30f, 0.5f, 0.70f, 0.86f)
+            craters.forEachIndexed { i, t0 ->
+                val mt = 1f - t0
+                val cx = mt * mt * 0f + 2f * mt * t0 * (w / 2f) + t0 * t0 * w
+                val cy = mt * mt * edgeY + 2f * mt * t0 * ctrlY + t0 * t0 * edgeY
+                val cr = (3.5f + (i % 3) * 2.2f) * (1f + 0.4f * progress)
+                drawCircle(Color(0x66222A35), cr, Offset(cx, cy + cr * 0.4f))
+                drawCircle(Color(0x4D5A6478), cr, Offset(cx, cy + cr * 0.4f), style = Stroke(1f))
+            }
         }
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = (10.dp + 56.dp * progress))
-                .graphicsLayer { alpha = 0.3f + 0.7f * progress },
+                .padding(bottom = (12.dp + 60.dp * progress))
+                .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
             horizontalArrangement = Arrangement.spacedBy(64.dp),
         ) {
             IconButton(onClick = onAdd) {
@@ -624,7 +647,7 @@ private fun DrawScope.drawTask(
     val p = planetPos(g, t)
     val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat()
     val dim = if (dimmed) 1f - 0.62f * z else 1f
-    val depthA = 0.5f + 0.5f * p.nearness
+    val depthA = 0.72f + 0.28f * p.nearness
     val sel = selected?.id == t.id
     val done = t.state == PlanetState.DONE
     val late = t.state == PlanetState.LATE
@@ -667,13 +690,16 @@ private fun DrawScope.drawTask(
         }
     }
 
-    // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红
+    // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
     if (t.state == PlanetState.NEAR) {
         val pulse = 0.3f + 0.32f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
         drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), p.r + 5f, Offset(p.x, p.y), style = Stroke(1.3f))
     }
     if (late) {
         drawCircle(LateColor.copy(alpha = 0.5f * dim), p.r + 5f, Offset(p.x, p.y), style = Stroke(1.2f))
+    }
+    if (t.state == PlanetState.PENDING) {
+        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), p.r + 2.5f, Offset(p.x, p.y), style = Stroke(1f))
     }
 
     // 选中：星表十字准星
