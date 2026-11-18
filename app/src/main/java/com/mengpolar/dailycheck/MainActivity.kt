@@ -1,6 +1,7 @@
 package com.mengpolar.dailycheck
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,6 +19,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mengpolar.dailycheck.data.CheckRecord
 import com.mengpolar.dailycheck.data.TaskUi
@@ -100,6 +106,25 @@ private fun App() {
         )
     }
 
+    val context = LocalContext.current
+    val imageKey = orbitState.items.joinToString("|") { it.imagePath ?: "-" }
+    val existingPreview = remember(imageKey, editTaskId) {
+        val path = orbitState.items.firstOrNull { it.id == editTaskId }?.imagePath
+        path?.let { p ->
+            val f = java.io.File(context.filesDir, p)
+            if (f.exists()) {
+                runCatching {
+                    BitmapFactory.decodeFile(
+                        f.absolutePath,
+                        BitmapFactory.Options().apply { inSampleSize = 4 },
+                    )?.asImageBitmap()
+                }.getOrNull()
+            } else {
+                null
+            }
+        }
+    }
+
     if (showEditSheet) {
         val initial = editTaskId?.let { id ->
             orbitState.items.firstOrNull { it.id == id }?.let { o ->
@@ -121,6 +146,7 @@ private fun App() {
             initial = initial,
             pendingImage = pendingImage,
             imageSet = initial?.hasImage == true,
+            existingPreview = existingPreview,
             onPickImage = {
                 pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
             },
@@ -142,15 +168,21 @@ private fun App() {
     }
 
     cropUri?.let { uri ->
-        CropScreen(
-            uri = uri,
-            onConfirm = { bmp ->
-                val id = editTaskId
-                if (id != null) taskVm.setPlanetImage(id, bmp) else pendingImage = bmp
-                cropUri = null
-            },
-            onCancel = { cropUri = null },
-        )
+        // 全屏 Dialog：盖在底部信息面板之上，选图后无需先关闭面板
+        Dialog(
+            onDismissRequest = { cropUri = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            CropScreen(
+                uri = uri,
+                onConfirm = { bmp ->
+                    val id = editTaskId
+                    if (id != null) taskVm.setPlanetImage(id, bmp) else pendingImage = bmp
+                    cropUri = null
+                },
+                onCancel = { cropUri = null },
+            )
+        }
     }
 
     UpdateDialogs(updateVm)

@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -62,6 +65,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
@@ -194,15 +198,16 @@ fun OrbitScreen(
         zoom.animateTo(if (selectedId != null) 1f else 0f, tween(380))
     }
 
-    // 倾斜视差：加速度计求得手机倾角，低通平滑后驱动星空轻移
+    // 倾斜视差：加速度计求得手机倾角（竖屏左右倾斜 → 左右偏移），低通平滑后驱动星空轻移
     var parallax by remember { mutableStateOf(Offset.Zero) }
     DisposableEffect(Unit) {
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val listener = object : SensorEventListener {
             private var sx = 0f; private var sy = 0f
             override fun onSensorChanged(e: android.hardware.SensorEvent) {
-                val tx = (-(e.values[0]) / 9.8f).coerceIn(-1f, 1f) * 14f
-                val ty = ((e.values[1]) / 9.8f).coerceIn(-1f, 1f) * 10f
+                // 竖屏持机：gx 随左右倾斜变化；gy≈9.8 为基准，上下倾斜取差值
+                val tx = (-(e.values[0]) / 9.8f).coerceIn(-1f, 1f) * 22f
+                val ty = ((e.values[1]) / 9.8f - 1f).coerceIn(-1f, 1f) * 14f
                 sx = sx * 0.85f + tx * 0.15f
                 sy = sy * 0.85f + ty * 0.15f
                 parallax = Offset(sx, sy)
@@ -255,6 +260,14 @@ fun OrbitScreen(
         }
     }
 
+    // 点击星光：触摸处留下随机颜色的亮点，5 秒淡出
+    val sparks = remember { mutableStateListOf<Spark>() }
+    val sparkRnd = remember { Random(System.nanoTime()) }
+    val addSpark: (Float, Float) -> Unit = { x, y ->
+        sparks.removeAll { System.currentTimeMillis() - it.born > 5200 }
+        sparks.add(Spark(x, y, sparkRnd.nextInt(360), System.currentTimeMillis()))
+    }
+
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
     val doCheck: (OrbitTask) -> Unit = { t ->
@@ -295,6 +308,7 @@ fun OrbitScreen(
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         val g = computeGeo(viewSize.width / screenDensity, viewSize.height / screenDensity)
                         val tx = tap.x / screenDensity; val ty = tap.y / screenDensity
+                        addSpark(tx, ty)
                         var best: OrbitTask? = null
                         var bd = 1e9f
                         state.items.forEach { t ->
@@ -330,50 +344,14 @@ fun OrbitScreen(
                         drawTask(g, t, timeMs, z, selected, planetImages, dimmed = selected != null && selected.id != t.id)
                     }
                 }
+
+                // 点击星光（最上层）
+                drawSparks(sparks, timeMs)
             }
         }
 
-        // 顶部：日期 + 入口（锚定顶部，宽随屏）
-        Row(
-            Modifier
-                .align(Alignment.TopStart)
-                .fillMaxWidth()
-                .padding(start = 20.dp, top = 14.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "${state.today.monthValue}月${state.today.dayOfMonth}日 · ${weekdayLabel(state.today)}",
-                    color = InkColor, fontSize = 16.sp, fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
-                )
-                Text(
-                    "TODAY ${state.doneCount}/${state.total} · LIT ${state.doneCount}",
-                    color = DimColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.5.sp,
-                )
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Rounded.Settings, "设置", tint = DimColor)
-            }
-            IconButton(onClick = onAdd) {
-                Icon(Icons.Rounded.Add, "添加任务", tint = GoldColor)
-            }
-        }
-
-        // 中心：未聚焦 = 空白提示；聚焦 = 详情卡
-        if (selected == null) {
-            Column(
-                Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text("＋", color = CardBorder, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "轻点行星 · 查看其周期",
-                    color = FaintColor, fontSize = 12.sp,
-                    fontFamily = FontFamily.Serif, letterSpacing = 5.sp,
-                )
-            }
-        } else {
+        // 中心：聚焦时展示详情卡（未聚焦 = 纯星空）
+        if (selected != null) {
             FocusCard(
                 t = selected,
                 zoom = zoom.value,
@@ -383,12 +361,102 @@ fun OrbitScreen(
             )
         }
 
+        // 底部弧形导航：上滑展开 设置/添加，下滑收起
+        ArcNavBar(
+            onAdd = onAdd,
+            onOpenSettings = onOpenSettings,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+
         SnackbarHost(
             snackbar,
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp),
+                .padding(bottom = 150.dp),
         )
+    }
+}
+
+/** 底部弧形导航：屏幕宽的弧形，占位很小；上滑升起带出按钮，下滑收起，轻点切换 */
+@Composable
+private fun ArcNavBar(
+    onAdd: () -> Unit,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var progress by remember { mutableFloatStateOf(0f) }
+    val heightDp = 38.dp + 104.dp * progress
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(heightDp)
+            .pointerInput(Unit) {
+                detectVerticalDragGestures { change, dragAmount ->
+                    change.consume()
+                    progress = (progress - dragAmount / 240f).coerceIn(0f, 1f)
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { progress = if (progress > 0.5f) 0f else 1f }
+            },
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val w = size.width; val h = size.height
+            val edgeY = h - h * 0.35f
+            val apexY = h - h * (0.55f + 0.45f * progress)
+            val ctrlY = h - 2f * apexY + edgeY
+            val band = Path().apply {
+                moveTo(0f, h)
+                lineTo(0f, edgeY)
+                quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
+                lineTo(w, h)
+                close()
+            }
+            drawPath(band, Color(0xB8080A10))
+            drawPath(
+                Path().apply {
+                    moveTo(0f, edgeY)
+                    quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
+                },
+                Color(0x33D8DEEE),
+                style = Stroke(1f),
+            )
+        }
+        Row(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = (10.dp + 56.dp * progress))
+                .graphicsLayer { alpha = 0.3f + 0.7f * progress },
+            horizontalArrangement = Arrangement.spacedBy(64.dp),
+        ) {
+            IconButton(onClick = onAdd) {
+                Icon(Icons.Rounded.Add, "添加任务", tint = GoldColor)
+            }
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Rounded.Settings, "设置", tint = DimColor)
+            }
+        }
+    }
+}
+
+private data class Spark(val x: Float, val y: Float, val hue: Int, val born: Long)
+
+private fun DrawScope.drawSparks(sparks: List<Spark>, timeMs: Long) {
+    sparks.forEach { s ->
+        val age = (timeMs - s.born).coerceAtLeast(0)
+        if (age > 5000) return@forEach
+        val a = (1f - age / 5000f)
+        val tw = 0.7f + 0.3f * sin(age / 140f)
+        val alpha = (a * tw).coerceIn(0f, 1f)
+        drawCircle(
+            Brush.radialGradient(
+                listOf(hsla(s.hue, 0.85f, 0.72f, 0.55f * alpha), Color.Black.copy(alpha = 0f)),
+                center = Offset(s.x, s.y),
+                radius = 11f,
+            ),
+            11f, Offset(s.x, s.y),
+        )
+        drawCircle(Color.White.copy(alpha = 0.9f * alpha), 1.8f + 0.8f * a, Offset(s.x, s.y))
     }
 }
 

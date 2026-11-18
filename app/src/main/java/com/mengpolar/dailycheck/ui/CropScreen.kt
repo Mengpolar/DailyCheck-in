@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.unit.dp
 
 private val CropGold = Color(0xFFD8B36A)
@@ -102,6 +103,7 @@ fun CropScreen(
         Modifier
             .fillMaxSize()
             .background(Color(0xFF06070B))
+            .statusBarsPadding()
     ) {
         // 顶栏
         Row(
