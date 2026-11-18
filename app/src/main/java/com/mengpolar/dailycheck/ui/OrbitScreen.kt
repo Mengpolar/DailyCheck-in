@@ -8,6 +8,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.util.Log
 import com.mengpolar.dailycheck.R
 import android.hardware.Sensor
 import android.hardware.SensorEventListener
@@ -70,7 +71,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -112,35 +112,41 @@ private val RING_DEFS = floatArrayOf(150f, 208f, 264f)
 /** 几何：以 dp 为单位（Canvas 内按屏幕密度整体缩放） */
 private class Geo(
     val w: Float, val h: Float, val cx: Float, val cy: Float,
-    val q: Float, val radii: List<Float>,
-)
+    val q: Float, val radiiPx: List<Float>, val s: Float,
+) {
+    /** dp 常数转 px */
+    fun dp(v: Float) = v * s
+}
 
-private fun computeGeo(w: Float, h: Float): Geo {
-    val q = if (h > w * 1.15f) 0.62f else 0.42f
-    val capX = w / 2f - 26f
-    val baseScale = (w / 2f - 20f) / (264f + 30f)
-    val radii = RING_DEFS.map { it * baseScale }.toMutableList()
-    radii[0] = maxOf(radii[0], 58f)
-    radii[1] = maxOf(radii[1], radii[0] + 52f)
-    radii[2] = maxOf(radii[2], radii[1] + 52f)
-    if (radii[2] > capX) {
-        val sp = maxOf(30f, (capX - 58f) / 2f)
-        radii.clear(); radii.addAll(listOf(58f, 58f + sp, 58f + 2f * sp))
+private fun computeGeo(wPx: Float, hPx: Float, d: Float): Geo {
+    val q = if (hPx > wPx * 1.15f) 0.62f else 0.42f
+    val s = d
+    val capX = wPx / 2f - 26f * s
+    val capY = hPx / 2f * 0.92f - 26f * s
+    val baseScale = (wPx / 2f - 20f * s) / (264f + 30f)
+    val radii = RING_DEFS.map { it * baseScale * s }.toMutableList()
+    radii[0] = maxOf(radii[0], 58f * s)
+    radii[1] = maxOf(radii[1], radii[0] + 52f * s)
+    radii[2] = maxOf(radii[2], radii[1] + 52f * s)
+    val cap = minOf(capX, capY)
+    if (radii[2] > cap) {
+        val sp = maxOf(26f * s, (cap - 72f * s) / 2f)
+        radii.clear(); radii.addAll(listOf(72f * s, 72f * s + sp, 72f * s + 2f * sp))
     }
-    return Geo(w, h, w / 2f, h / 2f, q, radii)
+    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, q, radii, s)
 }
 
 private fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 
 private class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
-private fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
+private fun planetPos(g: Geo, t: OrbitTask, zf: Float = 1f): PlanetPos {
     val a = planetAngle(t.frac)
-    val R = g.radii[t.ring]
+    val R = g.radiiPx[t.ring] * zf
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
-    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * (0.85f + 0.35f * nearness)
+    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * g.s * (0.85f + 0.35f * nearness)
     return PlanetPos(x, y, nearness, pr)
 }
 
@@ -149,14 +155,12 @@ private fun hsla(hue: Int, sat: Float, light: Float, alpha: Float) =
 
 // ── 共享画笔（避免每帧分配） ──
 private val namePaint = Paint().apply {
-    textSize = 11.5f; typeface = Typeface.SERIF
+    typeface = Typeface.SERIF
     textAlign = Paint.Align.CENTER; isAntiAlias = true
-    setShadowLayer(5f, 0f, 1f, 0xE604060C.toInt())
 }
 private val anchorPaint = Paint().apply {
-    textSize = 9.5f; typeface = Typeface.MONOSPACE
+    typeface = Typeface.MONOSPACE
     textAlign = Paint.Align.CENTER; isAntiAlias = true
-    setShadowLayer(4f, 0f, 1f, 0xE604060C.toInt())
 }
 private val dimMatrix = ColorMatrix(floatArrayOf(
     0.88f, 0f, 0f, 0f, 0f,
@@ -276,6 +280,11 @@ fun OrbitScreen(
         }.getOrNull()
     }
 
+    // 诊断几何（与 Canvas 内一致）
+    val diagGeo = remember(viewSize) {
+        computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+    }
+
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
     val doCheck: (OrbitTask) -> Unit = { t ->
@@ -302,9 +311,9 @@ fun OrbitScreen(
                 .pointerInput(state.items, viewSize) {
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
-                        val g = computeGeo(viewSize.width / screenDensity, viewSize.height / screenDensity)
-                        val tx = tap.x / screenDensity; val ty = tap.y / screenDensity
-                        addSpark(tx, ty)
+                        val g = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+                        val tx = tap.x; val ty = tap.y
+                        addSpark(tap.x, tap.y)
                         var best: OrbitTask? = null
                         var bd = 1e9f
                         state.items.forEach { t ->
@@ -317,19 +326,20 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g = computeGeo(size.width / d, size.height / d)
+            val g = computeGeo(size.width, size.height, d)
             val z = zoom.value
+            val zf = 1f + 0.05f * z
 
-            scale(d, d) {
-                // 背景图（cover + 视差，与星系同一画布，行星永远在背景之上）
+            try {
+                // 背景图：原始像素坐标绘制（不经 scale 变换，规避 dst 单位歧义），cover 铺满 + 视差
                 val bg = bgImage
                 if (bg != null) {
                     val bw = bg.width.toFloat(); val bh = bg.height.toFloat()
-                    val cover = maxOf(g.w / bw, g.h / bh) * 1.16f
+                    val cover = maxOf(size.width / bw, size.height / bh) * 1.16f
                     val dw = bw * cover; val dh = bh * cover
-                    val marginX = (dw - g.w) / 2f; val marginY = (dh - g.h) / 2f
-                    val left = (g.w - dw) / 2f - parallax.x.coerceIn(-marginX, marginX)
-                    val top = (g.h - dh) / 2f - parallax.y.coerceIn(-marginY, marginY)
+                    val marginX = (dw - size.width) / 2f; val marginY = (dh - size.height) / 2f
+                    val left = (size.width - dw) / 2f - parallax.x * d
+                    val top = (size.height - dh) / 2f - parallax.y * d
                     drawImage(
                         bg,
                         srcOffset = IntOffset.Zero,
@@ -339,30 +349,38 @@ fun OrbitScreen(
                         filterQuality = FilterQuality.Medium,
                     )
                 } else {
-                    drawRect(Color(0xFF06070B), size = Size(g.w, g.h))
+                    drawRect(Color(0xFF06070B), size = size)
                 }
-                // 暗角：边缘压暗，突出中心星系与文字
+                // 暗角：边缘压暗，突出中心星系与文字（原始像素坐标）
                 drawRect(
                     Brush.radialGradient(
                         listOf(Color(0x2206070B), Color(0x96000000)),
-                        center = Offset(g.cx, g.cy),
-                        radius = maxOf(g.w, g.h) * 0.72f,
-                    ),
-                    size = Size(g.w, g.h),
+                        center = Offset(size.width / 2f, size.height / 2f),
+                        radius = maxOf(size.width, size.height) * 0.72f,
+                    )
                 )
                 drawStars(g, stars, timeMs, Offset(parallax.x * 1.3f, parallax.y * 1.3f), 1f - 0.3f * z)
 
-                // 星系层：视差 + 聚焦缩放
-                scale(1f + 0.05f * z, 1f + 0.05f * z, pivot = Offset(g.cx, g.cy)) {
-                    drawOrbitLayer(g, z)
-                    drawAnchorTicks(g, state.items)
-                    state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
-                        drawTask(g, t, timeMs, z, selected, planetImages, dimmed = selected != null && selected.id != t.id)
-                    }
+                // 星系层：聚焦缩放通过轨道半径放大实现（无变换层，规避设备差异）
+                drawOrbitLayer(g, zf)
+                drawAnchorTicks(g, state.items, zf)
+                state.items.sortedBy { planetPos(g, it, zf).nearness }.forEach { t ->
+                    drawTask(g, t, timeMs, z, zf, selected, planetImages, dimmed = selected != null && selected.id != t.id)
                 }
 
                 // 点击星光（最上层）
-                drawSparks(sparks, timeMs)
+                drawSparks(g, sparks, timeMs)
+            } catch (t: Throwable) {
+                // 渲染异常兜底：屏上直接显示错误，避免整片黑无从排查
+                Log.e("OrbitCanvas", "draw failed", t)
+                drawRect(Color(0xFF160A0A))
+                drawContext.canvas.nativeCanvas.drawText(
+                    "渲染异常: ${t.message?.take(80)}",
+                    24f, size.height / 2f,
+                    Paint().apply {
+                        color = Color(0xFFFF8888).toArgb(); textSize = 36f; isAntiAlias = true
+                    },
+                )
             }
         }
 
@@ -376,6 +394,15 @@ fun OrbitScreen(
                 modifier = Modifier.align(Alignment.Center),
             )
         }
+
+        // 诊断行（定位渲染问题用，确认正常后移除）
+        Text(
+            "画布 ${viewSize.width}x${viewSize.height}px · 帧 ${frame / 1_000_000} · 任务 ${state.items.size} · 背景${if (bgImage != null) "√" else "×"} · 中心(${diagGeo.cx.toInt()},${diagGeo.cy.toInt()}) 轨道${diagGeo.radiiPx.map { (it / screenDensity).toInt() }}dp",
+            color = Color(0xFF9BA5B8), fontSize = 9.sp, fontFamily = FontFamily.Monospace,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(6.dp),
+        )
 
         // 底部弧形导航：上滑展开 设置/添加，下滑收起
         ArcNavBar(
@@ -428,10 +455,13 @@ private fun ArcNavBar(
             },
     ) {
         Canvas(Modifier.fillMaxSize()) {
+            val d = this.density
             val w = size.width; val h = size.height
-            val edgeY = h - h * 0.35f
-            val apexY = h - h * (0.62f + 0.38f * progress)
-            val ctrlY = 2f * apexY - edgeY  // 二次曲线中点公式：保证中点恰为 apex，弧形向上凸
+            // 弧度恒定的月面：曲线相对盒顶形状不变，整条弧随盒刚性上移（盒随屏底对齐）
+            val rise = h - 40f * d
+            val edgeY = h - 18f * d - rise
+            val apexY = h - 40f * d - rise
+            val ctrlY = 2f * apexY - edgeY
             val curve = Path().apply {
                 moveTo(0f, edgeY)
                 quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
@@ -466,7 +496,7 @@ private fun ArcNavBar(
                 val mt = 1f - t0
                 val cx = 2f * mt * t0 * (w / 2f) + t0 * t0 * w
                 val cy = mt * mt * edgeY + 2f * mt * t0 * ctrlY + t0 * t0 * edgeY
-                val cr = (3.5f + (i % 3) * 2.2f) * (1f + 0.4f * progress)
+                val cr = (3.5f + (i % 3) * 2.2f) * d
                 drawCircle(Color(0x66222A35), cr, Offset(cx, cy + cr * 0.4f))
                 drawCircle(Color(0x4D5A6478), cr, Offset(cx, cy + cr * 0.4f), style = Stroke(1f))
             }
@@ -491,7 +521,7 @@ private fun ArcNavBar(
 
 private data class Spark(val x: Float, val y: Float, val hue: Int, val born: Long)
 
-private fun DrawScope.drawSparks(sparks: List<Spark>, timeMs: Long) {
+private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long) {
     sparks.forEach { s ->
         val age = (timeMs - s.born).coerceAtLeast(0)
         if (age > 5000) return@forEach
@@ -502,11 +532,11 @@ private fun DrawScope.drawSparks(sparks: List<Spark>, timeMs: Long) {
             Brush.radialGradient(
                 listOf(hsla(s.hue, 0.85f, 0.72f, 0.55f * alpha), Color.Black.copy(alpha = 0f)),
                 center = Offset(s.x, s.y),
-                radius = 11f,
+                radius = 11f * g.s,
             ),
-            11f, Offset(s.x, s.y),
+            11f * g.s, Offset(s.x, s.y),
         )
-        drawCircle(Color.White.copy(alpha = 0.9f * alpha), 1.8f + 0.8f * a, Offset(s.x, s.y))
+        drawCircle(Color.White.copy(alpha = 0.9f * alpha), (1.8f + 0.8f * a) * g.s, Offset(s.x, s.y))
     }
 }
 
@@ -626,34 +656,35 @@ private fun DrawScope.drawStars(
             else -> Color(0xFFE2E6F0)
         }
         val x = s.xf * g.w + par.x; val y = s.yf * g.h + par.y
-        drawCircle(color.copy(alpha = tw * 0.85f * dimF), s.r, Offset(x, y))
+        drawCircle(color.copy(alpha = tw * 0.85f * dimF), s.r * g.s, Offset(x, y))
         if (s.flare) {
-            val l = s.r * 5f
-            drawLine(color.copy(alpha = tw * 0.5f * dimF), Offset(x - l, y), Offset(x + l, y), strokeWidth = 0.8f)
-            drawLine(color.copy(alpha = tw * 0.5f * dimF), Offset(x, y - l), Offset(x, y + l), strokeWidth = 0.8f)
+            val l = s.r * 5f * g.s
+            drawLine(color.copy(alpha = tw * 0.5f * dimF), Offset(x - l, y), Offset(x + l, y), strokeWidth = 0.8f * g.s)
+            drawLine(color.copy(alpha = tw * 0.5f * dimF), Offset(x, y - l), Offset(x, y + l), strokeWidth = 0.8f * g.s)
         }
     }
 }
 
-private fun DrawScope.drawOrbitLayer(g: Geo, z: Float) {
-    g.radii.forEach { R ->
+private fun DrawScope.drawOrbitLayer(g: Geo, zf: Float) {
+    g.radiiPx.forEach { R ->
         drawArc(
-            Color(0xFFBEC8E1).copy(alpha = 0.10f * (1f - 0.35f * z)),
+            Color(0xFFBEC8E1).copy(alpha = 0.16f * (1f - 0.35f * zf)),
             0f, 360f, false,
             topLeft = Offset(g.cx - R, g.cy - R * g.q),
             size = Size(R * 2f, R * g.q * 2f),
-            style = Stroke(1f),
+            style = Stroke(1.2f * g.s),
         )
     }
 }
 
-private fun DrawScope.drawAnchorTicks(g: Geo, items: List<OrbitTask>) {
-    g.radii.forEachIndexed { i, R ->
-        val y = g.cy - R * g.q
-        drawLine(Color(0x4DD8DEEE), Offset(g.cx, y - 4f), Offset(g.cx, y + 4f), strokeWidth = 1f)
+private fun DrawScope.drawAnchorTicks(g: Geo, items: List<OrbitTask>, zf: Float) {
+    anchorPaint.textSize = 9.5f * g.s
+    g.radiiPx.forEachIndexed { i, R ->
+        val y = g.cy - R * zf * g.q
+        drawLine(Color(0x4DD8DEEE), Offset(g.cx, y - 4f * g.s), Offset(g.cx, y + 4f * g.s), strokeWidth = 1f * g.s)
         val label = items.filter { it.ring == i }.joinToString(" / ") { it.anchorLabel }
         if (label.isNotBlank()) {
-            drawTextNc(label, g.cx, y - 9f, anchorPaint, DimColor.copy(alpha = 0.85f).toArgb())
+            drawTextNc(label, g.cx, y - 9f * g.s, anchorPaint, DimColor.copy(alpha = 0.85f).toArgb())
         }
     }
 }
@@ -667,18 +698,25 @@ private fun DrawScope.drawTask(
     t: OrbitTask,
     timeMs: Long,
     z: Float,
+    zf: Float,
     selected: OrbitTask?,
     images: Map<Long, Bitmap>,
     dimmed: Boolean,
 ) {
-    val p = planetPos(g, t)
+    val p = planetPos(g, t, zf)
+    if (timeMs % 2000L < 20L) {
+        Log.d(
+            "OrbitCanvas",
+            "planet \"${t.name}\" frac=${t.frac} ring=${t.ring} R=${g.radiiPx[t.ring]} pos=(${p.x}, ${p.y}) size=${g.w}x${g.h} nearness=${p.nearness}",
+        )
+    }
     val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat()
     val dim = if (dimmed) 1f - 0.62f * z else 1f
     val depthA = 0.72f + 0.28f * p.nearness
     val sel = selected?.id == t.id
     val done = t.state == PlanetState.DONE
     val late = t.state == PlanetState.LATE
-    val R = g.radii[t.ring]
+    val R = g.radiiPx[t.ring] * zf
     val ovalTopLeft = Offset(g.cx - R, g.cy - R * g.q)
     val ovalSize = Size(R * 2f, R * g.q * 2f)
 
@@ -691,13 +729,13 @@ private fun DrawScope.drawTask(
             drawArc(
                 LateColor.copy(alpha = 0.55f * dim * (1f - 0.4f * abs(f0 - 0.5f) * 2f)),
                 -90f + aDeg * f0, aDeg * (f1 - f0), false,
-                topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.6f),
+                topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.6f * g.s),
             )
         }
     } else {
         drawArc(
             hsla(t.hue, 0.5f, 0.58f, arcAlpha), -90f, aDeg, false,
-            topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.5f),
+            topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.5f * g.s),
         )
     }
 
@@ -712,7 +750,7 @@ private fun DrawScope.drawTask(
                 hsla(t.hue, 0.65f, 0.68f, al),
                 -90f + aDeg - span * f1, span * (f1 - f0), false,
                 topLeft = ovalTopLeft, size = ovalSize,
-                style = Stroke(maxOf(0.8f, p.r * 0.55f * (1f - f0))),
+                style = Stroke(maxOf(0.8f * g.s, p.r * 0.55f * (1f - f0))),
             )
         }
     }
@@ -720,24 +758,24 @@ private fun DrawScope.drawTask(
     // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
     if (t.state == PlanetState.NEAR) {
         val pulse = 0.3f + 0.32f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
-        drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), p.r + 5f, Offset(p.x, p.y), style = Stroke(1.3f))
+        drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), p.r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.3f * g.s))
     }
     if (late) {
-        drawCircle(LateColor.copy(alpha = 0.5f * dim), p.r + 5f, Offset(p.x, p.y), style = Stroke(1.2f))
+        drawCircle(LateColor.copy(alpha = 0.5f * dim), p.r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.2f * g.s))
     }
     if (t.state == PlanetState.PENDING) {
-        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), p.r + 2.5f, Offset(p.x, p.y), style = Stroke(1f))
+        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), p.r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
     }
 
     // 选中：星表十字准星
     if (sel) {
-        val gap = p.r + 9f
-        val l = 5f + sin(timeMs / 900f) * 1.2f
+        val gap = p.r + 9f * g.s
+        val l = (5f + sin(timeMs / 900f) * 1.2f) * g.s
         val c = Color(0xFFD8DEEE).copy(alpha = 0.75f * (0.4f + 0.6f * z))
         listOf(-1f to 0f, 1f to 0f, 0f to -1f, 0f to 1f).forEach { (dx, dy) ->
-            drawLine(c, Offset(p.x + dx * (gap - l), p.y + dy * (gap - l)), Offset(p.x + dx * (gap + l), p.y + dy * (gap + l)), 1f)
+            drawLine(c, Offset(p.x + dx * (gap - l), p.y + dy * (gap - l)), Offset(p.x + dx * (gap + l), p.y + dy * (gap + l)), 1f * g.s)
         }
-        drawCircle(Color(0xFFD8DEEE).copy(alpha = 0.22f * z), gap, Offset(p.x, p.y), style = Stroke(1f))
+        drawCircle(Color(0xFFD8DEEE).copy(alpha = 0.22f * z), gap, Offset(p.x, p.y), style = Stroke(1f * g.s))
     }
 
     // 已完成光晕（克制）
@@ -776,7 +814,9 @@ private fun DrawScope.drawTask(
         hsla(t.hue, 0.45f, 0.8f, 0.95f * maxOf(dim, 0.5f))
     else
         Color(0xFFC4CCDE).copy(alpha = 0.85f * maxOf(dim, 0.5f))
-    drawTextNc(t.name, p.x, p.y + p.r + 14f, namePaint, nameColor.toArgb())
+    namePaint.textSize = 11.5f * g.s
+    namePaint.setShadowLayer(5f * g.s, 0f, 1f * g.s, 0xE604060C.toInt())
+    drawTextNc(t.name, p.x, p.y + p.r + 14f * g.s, namePaint, nameColor.toArgb())
 }
 
 private fun DrawScope.drawProceduralPlanet(
