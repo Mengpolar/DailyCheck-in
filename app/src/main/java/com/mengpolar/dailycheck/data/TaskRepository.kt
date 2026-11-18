@@ -1,15 +1,16 @@
 package com.mengpolar.dailycheck.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.LocalDate
 
 /**
  * 单例仓库：内存中持有全部数据，变更后原子写入本地 JSON 文件。
- * 数据量小（任务几十个、记录数千条以内），无需数据库。
+ * 另负责行星图片的存取（filesDir/planets/task_<id>.png）。
  */
-class TaskRepository private constructor(context: Context) {
+class TaskRepository private constructor(private val context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true }
     private val file = File(context.filesDir, "dailycheck_data.json")
@@ -44,16 +45,21 @@ class TaskRepository private constructor(context: Context) {
 
     fun snapshot(): AppData = synchronized(lock) { data }
 
-    fun addTask(name: String, note: String, cycleType: CycleType, intervalDays: Int): Task = synchronized(lock) {
+    fun addTask(
+        name: String, note: String, cycleType: CycleType,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+    ): Task = synchronized(lock) {
         val task = Task(
             id = data.nextTaskId,
             name = name.trim(),
             note = note.trim(),
             cycleType = cycleType,
             intervalDays = if (cycleType == CycleType.EVERY_N_DAYS) intervalDays.coerceAtLeast(1) else 1,
+            anchorMin = if (cycleType == CycleType.DAILY) anchorMin.coerceIn(0, 1439) else 0,
             createdEpochDay = LocalDate.now().toEpochDay(),
         )
         data = data.copy(tasks = data.tasks + task, nextTaskId = data.nextTaskId + 1)
+        if (image != null) savePlanetImageLocked(task.id, image)
         persist()
         task
     }
@@ -63,11 +69,28 @@ class TaskRepository private constructor(context: Context) {
         persist()
     }
 
+    fun setPlanetImage(taskId: Long, image: Bitmap?) = synchronized(lock) {
+        val updated = data.tasks.map {
+            if (it.id == taskId) {
+                if (image != null) {
+                    savePlanetImageLocked(taskId, image)
+                    it.copy(imagePath = planetImagePath(taskId))
+                } else {
+                    deletePlanetImageLocked(taskId)
+                    it.copy(imagePath = null)
+                }
+            } else it
+        }
+        data = data.copy(tasks = updated)
+        persist()
+    }
+
     fun deleteTask(taskId: Long) = synchronized(lock) {
         data = data.copy(
             tasks = data.tasks.filterNot { it.id == taskId },
             records = data.records.filterNot { it.taskId == taskId },
         )
+        deletePlanetImageLocked(taskId)
         persist()
     }
 
@@ -99,6 +122,26 @@ class TaskRepository private constructor(context: Context) {
             },
         )
         persist()
+    }
+
+    // ───────────────────────── 行星图片 ─────────────────────────
+
+    private val planetsDir: File get() = File(context.filesDir, "planets").apply { mkdirs() }
+
+    private fun planetImagePath(taskId: Long) = "planets/task_$taskId.png"
+
+    fun planetImageFile(task: Task): File? =
+        task.imagePath?.let { File(context.filesDir, it).takeIf { f -> f.exists() } }
+
+    private fun savePlanetImageLocked(taskId: Long, image: Bitmap) {
+        runCatching {
+            val out = File(planetsDir, "task_$taskId.png")
+            out.outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 92, it) }
+        }
+    }
+
+    private fun deletePlanetImageLocked(taskId: Long) {
+        runCatching { File(planetsDir, "task_$taskId.png").delete() }
     }
 
     companion object {

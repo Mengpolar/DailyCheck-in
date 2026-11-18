@@ -1,6 +1,7 @@
 package com.mengpolar.dailycheck.data
 
 import android.app.Application
+import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
@@ -10,28 +11,59 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
-/** 首页列表项的展示状态 */
+private val ZONE: ZoneId = ZoneId.systemDefault()
+
+/** 首页轨道盘的渲染模型 */
+data class OrbitTask(
+    val id: Long,
+    val name: String,
+    val note: String,
+    val cycleType: CycleType,
+    val intervalDays: Int,
+    val anchorMin: Int,
+    val cycleLabel: String,
+    val anchorLabel: String,
+    val state: PlanetState,
+    /** 周期进度 0..1（每 N 天逾期后会绕圈取模） */
+    val frac: Float,
+    /** 彗尾长度 0..1（打卡后随时间淡出） */
+    val tail: Float,
+    val hue: Int,
+    val ring: Int,
+    val nextText: String,
+    val circleNo: Int,
+    val lastCheckText: String,
+    val recordCount: Int,
+    val hasImage: Boolean,
+    val imagePath: String?,
+)
+
+data class OrbitUiState(
+    val today: LocalDate,
+    val items: List<OrbitTask> = emptyList(),
+) {
+    val doneCount: Int get() = items.count { it.state == PlanetState.DONE }
+    val total: Int get() = items.size
+}
+
+/** 列表项展示状态（详情页复用） */
 data class TaskUi(
     val id: Long,
     val name: String,
     val note: String,
     val cycleType: CycleType,
     val intervalDays: Int,
+    val anchorMin: Int,
     val cycleLabel: String,
+    val anchorLabel: String,
     val done: Boolean,
     val statusText: String,
+    val hasImage: Boolean,
 )
-
-data class HomeUiState(
-    val today: LocalDate,
-    val pending: List<TaskUi> = emptyList(),
-    val done: List<TaskUi> = emptyList(),
-) {
-    val total: Int get() = pending.size + done.size
-    val doneCount: Int get() = done.size
-}
 
 data class DetailUiState(
     val task: TaskUi,
@@ -44,74 +76,133 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = TaskRepository.get(application)
     private val dataFlow = MutableStateFlow(repo.snapshot())
-    private val todayFlow = MutableStateFlow(LocalDate.now())
+    private val refreshTick = MutableStateFlow(System.currentTimeMillis())
     private val detailTaskId = MutableStateFlow<Long?>(null)
 
     init {
-        // 跨天时自动刷新状态（应用长时间停留时）
+        // 定期刷新：跨天/跨周期边界时自动更新行星状态
         viewModelScope.launch {
             while (true) {
                 delay(30_000)
-                val now = LocalDate.now()
-                if (now != todayFlow.value) todayFlow.value = now
+                refreshTick.value = System.currentTimeMillis()
             }
         }
     }
 
-    val homeState: StateFlow<HomeUiState> =
-        combine(dataFlow, todayFlow) { d, today -> computeHome(d, today) }
+    private fun lastCheckMs(d: AppData, taskId: Long?): Long? =
+        taskId?.let { id -> d.records.filter { it.taskId == id }.maxOfOrNull { it.createdAtEpochMs } }
+
+    private fun lastCheckText(ms: Long): String {
+        val t = Instant.ofEpochMilli(ms).atZone(ZONE)
+        val today = LocalDate.now()
+        val time = "%02d:%02d".format(t.hour, t.minute)
+        return when (t.toLocalDate()) {
+            today -> "今日 $time"
+            today.minusDays(1) -> "昨日 $time"
+            else -> "${t.monthValue}/${t.dayOfMonth} $time"
+        }
+    }
+
+    private fun nextText(t: Task, state: PlanetState): String = when (state) {
+        PlanetState.DONE -> when (t.cycleType) {
+            CycleType.DAILY -> "下次 明 %02d:%02d".format(t.anchorMin / 60, t.anchorMin % 60)
+            CycleType.WEEKLY -> "下次 下周一"
+            CycleType.MONTHLY -> "下次 下月 1 日"
+            CycleType.EVERY_N_DAYS -> "下次 ${t.intervalDays} 天后"
+        }
+        PlanetState.LATE -> "打卡后重新点亮"
+        PlanetState.NEAR -> "即将到期 · 若隐若现"
+        PlanetState.PENDING -> "周期内任意时间可打卡"
+    }
+
+    private fun hueOf(name: String): Int {
+        val palette = listOf(42, 205, 160, 268, 8, 330, 190, 95, 65, 285)
+        return palette[(name.hashCode().let { if (it < 0) it * -1 else it }) % palette.size]
+    }
+
+    private fun ringOf(t: Task): Int = when (t.cycleType) {
+        CycleType.DAILY -> 0
+        CycleType.WEEKLY, CycleType.EVERY_N_DAYS -> 1
+        CycleType.MONTHLY -> 2
+    }
+
+    private fun computeOrbit(d: AppData, nowMs: Long): OrbitUiState {
+        val today = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
+        val items = d.tasks.map { task ->
+            val lastMs = lastCheckMs(d, task.id)
+            val state = task.planetState(nowMs, lastMs)
+            val (frac, overdueLap) = task.periodFraction(nowMs, lastMs)
+            val done = state == PlanetState.DONE
+            val records = d.records.filter { it.taskId == task.id }
+            val tail = if (done && lastMs != null) {
+                val w = task.periodWindow(nowMs, lastMs)
+                (1f - ((nowMs - lastMs).toFloat() / w.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
+            } else 0f
+            OrbitTask(
+                id = task.id,
+                name = task.name,
+                note = task.note,
+                cycleType = task.cycleType,
+                intervalDays = task.intervalDays,
+                anchorMin = task.anchorMin,
+                cycleLabel = task.cycleLabel(),
+                anchorLabel = task.anchorLabel(),
+                state = state,
+                frac = frac,
+                tail = tail,
+                hue = hueOf(task.name),
+                ring = ringOf(task),
+                nextText = nextText(task, state),
+                circleNo = records.size + 1,
+                lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
+                recordCount = records.size,
+                hasImage = task.imagePath != null,
+                imagePath = task.imagePath,
+            )
+        }
+        return OrbitUiState(today = today, items = items)
+    }
+
+    val orbitState: StateFlow<OrbitUiState> =
+        combine(dataFlow, refreshTick) { d, now -> computeOrbit(d, now) }
             .stateIn(
                 viewModelScope,
                 SharingStarted.WhileSubscribed(5_000),
-                computeHome(repo.snapshot(), LocalDate.now()),
+                computeOrbit(repo.snapshot(), System.currentTimeMillis()),
             )
 
     val detailState: StateFlow<DetailUiState?> =
-        combine(dataFlow, todayFlow, detailTaskId) { d, today, id ->
+        combine(dataFlow, detailTaskId) { d, id ->
             val task = d.tasks.firstOrNull { it.id == id } ?: return@combine null
+            val nowMs = System.currentTimeMillis()
+            val lastMs = lastCheckMs(d, id)
+            val state = task.planetState(nowMs, lastMs)
             val records = d.records.filter { it.taskId == id }.sortedByDescending { it.createdAtEpochMs }
+            val statusText = when (state) {
+                PlanetState.DONE -> "✓ 本周期已点亮"
+                PlanetState.LATE -> "⚠ 已逾期 · 正在熄灭"
+                PlanetState.NEAR -> "临近到期 · 若隐若现"
+                PlanetState.PENDING -> "待打卡 · 黑白星"
+            }
             DetailUiState(
-                task = task.toUi(today),
+                task = TaskUi(
+                    id = task.id,
+                    name = task.name,
+                    note = task.note,
+                    cycleType = task.cycleType,
+                    intervalDays = task.intervalDays,
+                    anchorMin = task.anchorMin,
+                    cycleLabel = task.cycleLabel(),
+                    anchorLabel = task.anchorLabel(),
+                    done = state == PlanetState.DONE,
+                    statusText = statusText,
+                    hasImage = task.imagePath != null,
+                ),
                 recordCount = records.size,
                 lastRecordDate = records.maxOfOrNull { LocalDate.ofEpochDay(it.epochDay) },
                 records = records,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    private fun computeHome(d: AppData, today: LocalDate): HomeUiState {
-        val uis = d.tasks.map { it.toUi(today) }
-        return HomeUiState(
-            today = today,
-            pending = uis.filterNot { it.done },
-            done = uis.filter { it.done },
-        )
-    }
-
-    private fun Task.toUi(today: LocalDate): TaskUi {
-        val done = isDoneForPeriod(today)
-        val due = nextDueDate(today)
-        val status = when {
-            done -> when (cycleType) {
-                CycleType.DAILY -> "今日已完成"
-                CycleType.WEEKLY -> "本周已完成"
-                CycleType.MONTHLY -> "本月已完成"
-                CycleType.EVERY_N_DAYS -> "下次 ${formatDateShort(due)} 打卡"
-            }
-            due.isEqual(today) -> "今日待打卡"
-            due.isBefore(today) -> "已逾期 ${today.toEpochDay() - due.toEpochDay()} 天"
-            else -> "待打卡"
-        }
-        return TaskUi(
-            id = id,
-            name = name,
-            note = note,
-            cycleType = cycleType,
-            intervalDays = intervalDays,
-            cycleLabel = cycleLabel(),
-            done = done,
-            statusText = status,
-        )
-    }
 
     fun openDetail(id: Long?) {
         detailTaskId.value = id
@@ -119,14 +210,21 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refresh() {
         dataFlow.value = repo.snapshot()
+        refreshTick.value = System.currentTimeMillis()
     }
 
-    fun addTask(name: String, note: String, cycleType: CycleType, intervalDays: Int) {
-        repo.addTask(name, note, cycleType, intervalDays)
+    fun addTask(
+        name: String, note: String, cycleType: CycleType,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+    ) {
+        repo.addTask(name, note, cycleType, intervalDays, anchorMin, image)
         refresh()
     }
 
-    fun editTask(id: Long, name: String, note: String, cycleType: CycleType, intervalDays: Int) {
+    fun editTask(
+        id: Long, name: String, note: String, cycleType: CycleType,
+        intervalDays: Int, anchorMin: Int,
+    ) {
         val existing = dataFlow.value.tasks.firstOrNull { it.id == id } ?: return
         repo.updateTask(
             existing.copy(
@@ -134,10 +232,22 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 note = note.trim(),
                 cycleType = cycleType,
                 intervalDays = if (cycleType == CycleType.EVERY_N_DAYS) intervalDays.coerceAtLeast(1) else 1,
+                anchorMin = if (cycleType == CycleType.DAILY) anchorMin.coerceIn(0, 1439) else 0,
             )
         )
         refresh()
     }
+
+    fun setPlanetImage(id: Long, image: Bitmap?) {
+        repo.setPlanetImage(id, image)
+        refresh()
+    }
+
+    /** 新建流程中暂存的图片，插入任务后落盘 */
+    fun addTaskWithImage(
+        name: String, note: String, cycleType: CycleType,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+    ) = addTask(name, note, cycleType, intervalDays, anchorMin, image)
 
     fun deleteTask(id: Long) {
         repo.deleteTask(id)

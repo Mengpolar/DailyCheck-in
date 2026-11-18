@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>轨道星图 · 每日打卡 UI 原型 v2</title>
+<style>
+  :root {
+    --ink: #d9dee8;
+    --dim: #7c8496;
+    --faint: #4a5164;
+    --gold: #d8b36a;
+    --gold-dim: rgba(216, 179, 106, .55);
+    --late: #cf6a5b;
+    --serif: "Noto Serif SC", "Source Han Serif SC", "SimSun", "STSong", serif;
+    --mono: "SF Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #06070b; overflow: hidden; }
+  body { font-family: var(--serif); color: var(--ink); }
+
+  #space { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ── 中心：聚焦时才浮现的注记卡；未聚焦 = 空白 ── */
+  #core {
+    position: fixed; left: 50%; top: 50%;
+    width: 248px; height: 248px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    border: 1px solid rgba(216, 222, 238, .14);
+    background: rgba(8, 10, 16, .55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; padding: 26px; text-align: center;
+  }
+  #core.focused { display: flex; animation: coreIn .4s ease; }
+  @keyframes coreIn {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(.9); }
+  }
+  #centerHint {
+    position: fixed; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 12px; color: var(--faint);
+    letter-spacing: .34em; text-indent: .34em;
+    user-select: none; pointer-events: none;
+    transition: opacity .4s;
+  }
+  #centerHint.hidden { opacity: 0; }
+  #centerHint .cross { color: rgba(216, 222, 238, .22); font-size: 14px; margin-bottom: 6px; font-family: var(--mono); }
+  #core .name { font-size: 23px; font-weight: 600; letter-spacing: .18em; text-indent: .18em; }
+  #core .cycle { font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .25em; }
+  #core .status { font-size: 14px; letter-spacing: .1em; margin-top: 1px; }
+  #core .status.ok { color: var(--gold); }
+  #core .status.due { color: #b9c2d4; }
+  #core .status.late { color: var(--late); }
+  #core .nextline { font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: .12em; }
+  #core .stat { font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing: .1em; }
+  #checkBtn {
+    margin-top: 9px; padding: 9px 32px; border-radius: 2px;
+    background: transparent;
+    border: 1px solid var(--gold-dim);
+    color: var(--gold); font-size: 13px; font-family: var(--serif);
+    letter-spacing: .55em; text-indent: .55em;
+    cursor: pointer; transition: all .3s;
+  }
+  #checkBtn:hover { background: rgba(216, 179, 106, .12); border-color: var(--gold); }
+  #checkBtn:disabled {
+    border-color: rgba(216, 179, 106, .25); color: rgba(216, 179, 106, .7);
+    cursor: default; background: transparent;
+  }
+  #core .hint { font-size: 10.5px; color: var(--faint); letter-spacing: .2em; margin-top: 2px; }
+  /* 空白态由 #centerHint 承担，无面板 */
+  #core .hint { font-size: 10.5px; color: var(--faint); letter-spacing: .2em; margin-top: 2px; }
+
+  /* ── 页眉注记 ── */
+  #header { position: fixed; top: 24px; left: 30px; line-height: 1.7; user-select: none; }
+  #header .date { font-size: 17px; letter-spacing: .22em; }
+  #header .sub { font-family: var(--mono); font-size: 10.5px; color: var(--dim); letter-spacing: .18em; }
+
+  /* ── 演示控制（默认收起） ── */
+  #demo {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 10.5px; color: #565e74;
+    letter-spacing: .1em; user-select: none; opacity: .75;
+  }
+  #demo button {
+    background: none; border: 1px solid #262c3e; color: #767e94; border-radius: 2px;
+    padding: 3px 12px; margin: 0 3px; cursor: pointer; font-size: 10.5px; font-family: var(--mono);
+  }
+  #demoToggle { border: none !important; font-size: 13px; color: #9aa2b8 !important; letter-spacing: .2em; }
+  #demo button:hover { border-color: #3c445c; color: #a8b0c8; }
+
+  @media (max-width: 620px) {
+    #header { top: 14px; left: 16px; }
+    #header .date { font-size: 14px; }
+    #demo { bottom: 10px; }
+    #core .hint { display: none; }
+    #centerHint { top: auto; bottom: 56px; transform: translateX(-50%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="space"></canvas>
+
+<div id="header">
+  <div class="date" id="hdrDate">11月18日 · 周二</div>
+  <div class="sub" id="hdrSub">TODAY 2/5 · LIT 2</div>
+</div>
+
+<div id="centerHint"><div class="cross">＋</div>轻点行星 · 查看其周期</div>
+
+<div id="core">
+  <div class="detail">
+    <div class="name">—</div>
+    <div class="cycle">—</div>
+    <div class="status">—</div>
+    <div class="nextline">—</div>
+    <button id="checkBtn">打 卡</button>
+    <div class="stat">—</div>
+    <div class="hint">点击空白处 · 退出聚焦</div>
+  </div>
+</div>
+
+<div id="demo">
+  <button id="demoToggle">···</button>
+  <span id="demoPanel" hidden>
+    演示：<button id="btnCheckAll">全部打卡</button><button id="btnReset">重置</button>
+  </span>
+</div>
+
+<script>
+// ───────────────────── 数据：周期时钟模型 ─────────────────────
+// position = (now - periodStart) / periodDuration，行星随真实时间沿轨道顺时针运行
+const tasks = [
+  { id: 1, name: '晨读', cycle: '每日', ring: 0, hue: 42,  state: 'done',
+    anchor: 'daily', anchorMin: 5.5 * 60, anchorLabel: '05:30',
+    streak: 12, last: '07:30', tail: 0.16, next: '明 05:30' },
+  { id: 2, name: '健身', cycle: '每日', ring: 0, hue: 8,   state: 'near',
+    anchor: 'daily', anchorMin: 20 * 60, anchorLabel: '20:00',
+    streak: 3, last: '昨日 20:00', tail: 0, next: '今 20:00 后' },
+  { id: 3, name: '周报', cycle: '每周', ring: 1, hue: 205, state: 'done',
+    anchor: 'weekly', anchorLabel: '周一 00:00',
+    streak: 6, last: '周一 18:00', tail: 0.34, next: '下周一' },
+  { id: 4, name: '月度复盘', cycle: '每月', ring: 2, hue: 268, state: 'pending',
+    anchor: 'monthly', anchorLabel: '1日 00:00',
+    streak: 1, last: '10/28', tail: 0, next: '12/1 前' },
+  { id: 5, name: '早睡', cycle: '每 3 天', ring: 1, hue: 160, state: 'late',
+    anchor: 'nday', anchorDate: new Date('2026-11-12T23:00:00'), durH: 72, anchorLabel: '11/12 23:00',
+    streak: 0, last: '11/12', tail: 0, next: '已逾期' },
+];
+
+let selected = null;          // null = 未聚焦，中心空白
+let zoomF = 0;                // 聚焦动画进度 0→1
+let Q = 0.42;                 // 椭圆扁率（轻微倾斜视角；竖屏加大以利用纵向空间）
+const RING_R = [150, 208, 264];
+let RING_R_px = RING_R;
+
+// ───────────────────── 画布几何 ─────────────────────
+const cv = document.getElementById('space');
+const ctx = cv.getContext('2d');
+let W, H, CX, CY, DPR;
+
+function layoutCore() {
+  const core = document.getElementById('core');
+  const s = Math.min(248, W * 0.55, H * 0.46);
+  core.style.width = s + 'px';
+  core.style.height = s + 'px';
+  core.style.zoom = s / 248;
+}
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  CX = W / 2; CY = H / 2;
+
+  // 竖屏：加大扁率，让星系在纵向上也展开
+  Q = (H > W * 1.15) ? 0.62 : 0.42;
+
+  // 未聚焦时中心无面板：行星可自由穿过中心，仅保留极小的提示避让区
+  const capX = W / 2 - 26;
+  const baseScale = (W / 2 - 20) / (Math.max(...RING_R) + 30);
+  let radii = RING_R.map(r => r * baseScale);
+  radii[0] = Math.max(radii[0], 58);
+  radii[1] = Math.max(radii[1], radii[0] + 52);
+  radii[2] = Math.max(radii[2], radii[1] + 52);
+  if (radii[2] > capX) {
+    const sp = Math.max(30, (capX - 58) / 2);
+    radii = [58, 58 + sp, 58 + 2 * sp];
+  }
+  RING_R_px = radii;
+  layoutCore();
+}
+
+// ───────────────────── 星空 ─────────────────────
+const stars = [];
+for (let i = 0; i < 320; i++) {
+  const warm = Math.random() < 0.3, cool = !warm && Math.random() < 0.4;
+  stars.push({
+    x: Math.random(), y: Math.random(),
+    r: Math.random() * 1.15 + 0.3,
+    c: warm ? '255,233,196' : cool ? '207,224,255' : '226,230,240',
+    p: Math.random() * Math.PI * 2, s: Math.random() * 0.9 + 0.15,
+    flare: Math.random() < 0.045,
+  });
+}
+
+// ───────────────────── 行星纹理 ─────────────────────
+function makePlanet(hue) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(46, 42, 5, 64, 64, 64);
+  grd.addColorStop(0, `hsl(${hue} 62% 74%)`);
+  grd.addColorStop(0.55, `hsl(${hue} 52% 48%)`);
+  grd.addColorStop(1, `hsl(${(hue + 12) % 360} 48% 20%)`);
+  g.fillStyle = grd;
+  g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+  for (let i = 0; i < 22; i++) {
+    g.globalAlpha = 0.04 + Math.random() * 0.07;
+    g.fillStyle = `hsl(${(hue + Math.random() * 24 - 12 + 360) % 360} 45% ${18 + Math.random() * 26}%)`;
+    const y = 20 + Math.random() * 88, w = 12 + Math.random() * 58, h = 3 + Math.random() * 6;
+    g.beginPath(); g.ellipse(64 - w / 2 + (Math.random() * 26 - 13), y, w / 2, h / 2, 0, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  // 晨昏线（右上光源 → 左下阴影）
+  const sh = g.createRadialGradient(44, 40, 8, 60, 62, 68);
+  sh.addColorStop(0.35, 'rgba(255,250,240,0.16)');
+  sh.addColorStop(0.7, 'rgba(0,0,0,0)');
+  sh.addColorStop(1, 'rgba(2,3,10,0.62)');
+  g.fillStyle = sh;
+  g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+  // 大气缘光
+  g.strokeStyle = `hsla(${hue} 60% 72% / .35)`; g.lineWidth = 1.6;
+  g.beginPath(); g.arc(64, 64, 57, 0, Math.PI * 2); g.stroke();
+  return c;
+}
+const planetImg = {};
+tasks.forEach(t => planetImg[t.id] = makePlanet(t.hue));
+
+// ───────────────────── 周期时钟：位置计算 ─────────────────────
+function periodFraction(t) {
+  const now = new Date();
+  let start, dur;
+  if (t.anchor === 'daily') {
+    start = new Date(now); start.setHours(0, 0, 0, 0);
+    start = new Date(start.getTime() + t.anchorMin * 60000);
+    if (now < start) start = new Date(start.getTime() - 86400000);
+    dur = 86400000;
+  } else if (t.anchor === 'weekly') {
+    start = new Date(now); start.setHours(0, 0, 0, 0);
+    start = new Date(start.getTime() - ((start.getDay() + 6) % 7) * 86400000);
+    dur = 7 * 86400000;
+  } else if (t.anchor === 'monthly') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    dur = new Date(now.getFullYear(), now.getMonth() + 1, 1) - start;
+  } else { // nday
+    dur = t.durH * 3600000;
+    const elapsed = now - t.anchorDate;
+    return { frac: (elapsed / dur) % 1, overdue: elapsed > dur };
+  }
+  return { frac: (now - start) / dur, overdue: false };
+}
+
+function planetAngle(t) { return periodFraction(t).frac * Math.PI * 2; } // 顺时针，自顶端起始线
+
+function planetXY(t, time) {
+  const R = RING_R_px[t.ring];
+  const a = planetAngle(t);
+  const px = CX + Math.sin(a) * R;            // 顶端=起始线，顺时针
+  const py = CY - Math.cos(a) * R * Q;
+  const nearness = (1 - Math.cos(a)) / 2;      // 0=远端(上) 1=近端(下)
+  return { px, py, nearness, R, a };
+}
+
+// ───────────────────── 绘制 ─────────────────────
+let parX = 0, parY = 0, parTX = 0, parTY = 0;
+addEventListener('deviceorientation', e => {
+  if (e.gamma == null) return;
+  parTX = Math.max(-14, Math.min(14, e.gamma / 25 * 14));
+  parTY = Math.max(-10, Math.min(10, (e.beta - 40) / 25 * 10));
+});
+addEventListener('pointermove', e => {
+  parTX = (e.clientX / W - 0.5) * 24;
+  parTY = (e.clientY / H - 0.5) * 16;
+});
+
+function drawStars(time, dimF) {
+  const ox = parX, oy = parY;
+  for (const s of stars) {
+    const tw = 0.4 + 0.6 * Math.abs(Math.sin(time / 1400 * s.s + s.p));
+    ctx.globalAlpha = tw * 0.85 * dimF;
+    ctx.fillStyle = `rgba(${s.c},1)`;
+    const x = s.x * W + ox, y = s.y * H + oy;
+    ctx.beginPath(); ctx.arc(x, y, s.r, 0, Math.PI * 2); ctx.fill();
+    if (s.flare) {   // 十字星芒
+      ctx.globalAlpha = tw * 0.5 * dimF;
+      ctx.strokeStyle = `rgba(${s.c},.8)`; ctx.lineWidth = 0.6;
+      const L = s.r * 5;
+      ctx.beginPath();
+      ctx.moveTo(x - L, y); ctx.lineTo(x + L, y);
+      ctx.moveTo(x, y - L); ctx.lineTo(x, y + L);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawOrbitLayer(time, z) {
+  // 底层轨道：发丝线椭圆
+  RING_R_px.forEach(R => {
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(190, 200, 225, ${0.10 * (1 - 0.35 * z)})`;
+    ctx.lineWidth = 1;
+    ctx.ellipse(CX, CY, R, R * Q, 0, 0, Math.PI * 2); ctx.stroke();
+  });
+  // 起始线刻度 + 锚点注记（12 点方向一列）
+  ctx.font = '9.5px "SF Mono",Consolas,monospace';
+  ctx.textAlign = 'center';
+  RING_R_px.forEach((R, i) => {
+    const y = CY - R * Q;
+    ctx.strokeStyle = `rgba(216, 222, 238, ${0.3 * (1 - 0.3 * z)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(CX, y - 4); ctx.lineTo(CX, y + 4); ctx.stroke();
+    const ringTasks = tasks.filter(t => t.ring === i);
+    const label = ringTasks.map(t => t.anchorLabel).join(' / ');
+    ctx.fillStyle = `rgba(124, 132, 150, ${0.8 * (1 - 0.3 * z)})`;
+    ctx.fillText(label, CX, y - 9);
+  });
+}
+
+function drawTask(t, time, z, dimmed) {
+  const { px, py, nearness, R, a } = planetXY(t, time);
+  const pr = (t.ring === 0 ? 16 : t.ring === 1 ? 18 : 20) * (0.72 + 0.5 * nearness);
+  const dim = dimmed ? 1 - 0.62 * z : 1;
+  const depthA = 0.5 + 0.5 * nearness;
+  const sel = selected && selected.id === t.id;
+  const done = t.state === 'done';
+  const late = t.state === 'late';
+
+  // 周期进度弧：从起始线到行星当前位置
+  const done2 = done ? 0.14 : 0;
+  ctx.beginPath();
+  ctx.strokeStyle = `hsla(${t.hue} ${late ? 45 : 50}% ${late ? 42 : 58}% / ${(late ? 0.5 : 0.42) * dim * (1 - 0.3 * z)})`;
+  ctx.lineWidth = 1.5;
+  if (late) ctx.setLineDash([3, 5]);
+  ctx.ellipse(CX, CY, R, R * Q, 0, -Math.PI / 2, a - Math.PI / 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 彗尾（打卡后随时间淡出，拖在行星后方）
+  if (t.tail > 0 && done) {
+    const span = t.tail * Math.PI * 2, seg = 20;
+    for (let i = 0; i < seg; i++) {
+      const f0 = i / seg, f1 = (i + 1) / seg;
+      const al = Math.pow(1 - f0, 2) * 0.4 * dim;
+      ctx.beginPath();
+      ctx.strokeStyle = `hsla(${t.hue} 65% 68% / ${al})`;
+      ctx.lineWidth = Math.max(0.8, pr * 0.55 * (1 - f0));
+      ctx.ellipse(CX, CY, R, R * Q, 0, a - f1 * span - Math.PI / 2, a - f0 * span - Math.PI / 2);
+      ctx.stroke();
+    }
+  }
+
+  // 状态环：临近到期=琥珀脉冲 / 逾期=暗红
+  if (t.state === 'near') {
+    const pulse = 0.3 + 0.32 * (0.5 + 0.5 * Math.sin(time / 500 + t.ring * 2));
+    ctx.beginPath();
+    ctx.strokeStyle = `hsla(40 85% 62% / ${pulse * dim})`;
+    ctx.lineWidth = 1.3;
+    ctx.arc(px, py, pr + 5, 0, Math.PI * 2); ctx.stroke();
+  }
+  if (late) {
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(207, 106, 91, ${0.5 * dim})`;
+    ctx.lineWidth = 1.2;
+    ctx.arc(px, py, pr + 5, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 选中：星表十字准星
+  if (sel) {
+    const g = pr + 9, L = 5 + Math.sin(time / 900) * 1.2;
+    ctx.strokeStyle = `rgba(216, 222, 238, ${0.75 * (0.4 + 0.6 * z)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    [[-1, 0], [1, 0], [0, -1], [0, 1]].forEach(([dx, dy]) => {
+      ctx.moveTo(px + dx * (g - L), py + dy * (g - L));
+      ctx.lineTo(px + dx * (g + L), py + dy * (g + L));
+    });
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(216, 222, 238, ${0.22 * z})`;
+    ctx.arc(px, py, g, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 已完成光晕（克制）
+  if (done) {
+    const glow = ctx.createRadialGradient(px, py, pr * 0.4, px, py, pr * 2.1);
+    glow.addColorStop(0, `hsla(${t.hue} 60% 62% / ${0.22 * dim})`);
+    glow.addColorStop(1, 'hsla(0 0% 0% / 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(px, py, pr * 2.1, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 行星本体
+  let alpha = depthA * dim;
+  if (t.state === 'near') alpha *= 0.55 + 0.28 * (0.5 + 0.5 * Math.sin(time / 500 + t.ring * 2));
+  if (late) alpha *= 0.62;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (!done) ctx.filter = 'grayscale(1) brightness(0.8)';
+  if (done) { ctx.shadowColor = `hsla(${t.hue} 60% 58% / .8)`; ctx.shadowBlur = 14; }
+  ctx.drawImage(planetImg[t.id], px - pr, py - pr, pr * 2, pr * 2);
+  ctx.restore();
+
+  // 名字注记（星图式：衬线 + 小投影）
+  ctx.save();
+  ctx.font = '11.5px "Noto Serif SC","SimSun",serif';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(4, 6, 12, 0.9)'; ctx.shadowBlur = 5;
+  ctx.fillStyle = done
+    ? `hsla(${t.hue} 45% 80% / ${0.95 * Math.max(dim, 0.5)})`
+    : `rgba(196, 204, 222, ${0.85 * Math.max(dim, 0.5)})`;
+  ctx.fillText(t.name, px, py + pr + 14);
+  ctx.restore();
+}
+
+function draw(time) {
+  // 视差缓动
+  parX += (parTX - parX) * 0.05;
+  parY += (parTY - parY) * 0.05;
+  // 聚焦缩放缓动
+  zoomF += ((selected ? 1 : 0) - zoomF) * 0.07;
+  const z = zoomF;
+
+  // 背景：近黑平面 + 极淡暗角
+  ctx.fillStyle = '#06070b'; ctx.fillRect(0, 0, W, H);
+  const vg = ctx.createRadialGradient(CX, CY, Math.min(W, H) * 0.2, CX, CY, Math.max(W, H) * 0.72);
+  vg.addColorStop(0, 'rgba(14,17,26,0.35)'); vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+  drawStars(time, 1 - 0.3 * z);
+
+  // 星系层：轻微视差 + 聚焦缩放
+  ctx.save();
+  ctx.translate(CX + parX * 0.3, CY + parY * 0.3);
+  ctx.scale(1 + 0.05 * z, 1 + 0.05 * z);
+  ctx.translate(-CX, -CY);
+
+  drawOrbitLayer(time, z);
+  // 远端行星（面板后方） → 近端行星（面板前方）
+  const dimmed = !!selected;
+  tasks.filter(t => planetXY(t, time).nearness < 0.5).forEach(t => drawTask(t, time, z, dimmed && selected.id !== t.id));
+  tasks.filter(t => planetXY(t, time).nearness >= 0.5).forEach(t => drawTask(t, time, z, dimmed && selected.id !== t.id));
+
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ───────────────────── 交互 ─────────────────────
+const coreEl = document.getElementById('core');
+
+cv.addEventListener('click', e => {
+  let best = null, bd = 1e9;
+  tasks.forEach(t => {
+    const { px, py } = planetXY(t, 0);
+    const d = Math.hypot(e.clientX - px, e.clientY - py);
+    if (d < 34 && d < bd) { bd = d; best = t; }
+  });
+  if (best) { selected = best; renderCore(); }
+  else if (selected) { selected = null; renderCore(); }   // 点击空白/边缘 → 退焦
+});
+
+function renderCore() {
+  const core = coreEl;
+  const hint = document.getElementById('centerHint');
+  core.classList.toggle('focused', !!selected);
+  hint.classList.toggle('hidden', !!selected);
+  if (!selected) return;
+  const t = selected;
+  core.querySelector('.name').textContent = t.name;
+  core.querySelector('.cycle').textContent = `${t.cycle} · 第 ${t.streak + 1} 圈`;
+  const st = core.querySelector('.status');
+  const nx = core.querySelector('.nextline');
+  const btn = document.getElementById('checkBtn');
+  if (t.state === 'done') {
+    st.textContent = '✓ 本周期已点亮'; st.className = 'status ok';
+    nx.textContent = `⏱ 下次 ${t.next}`;
+    btn.disabled = true; btn.textContent = '✓ 已打卡';
+  } else if (t.state === 'late') {
+    st.textContent = '⚠ 已逾期 · 正在熄灭'; st.className = 'status late';
+    nx.textContent = `⏱ 起始线 ${t.anchorLabel}`;
+    btn.disabled = false; btn.textContent = '打 卡';
+  } else if (t.state === 'near') {
+    st.textContent = '临近到期 · 若隐若现'; st.className = 'status due';
+    nx.textContent = `⏱ ${t.next} 到期`;
+    btn.disabled = false; btn.textContent = '打 卡';
+  } else {
+    st.textContent = '待打卡 · 黑白星'; st.className = 'status due';
+    nx.textContent = `⏱ ${t.next}`;
+    btn.disabled = false; btn.textContent = '打 卡';
+  }
+  core.querySelector('.stat').textContent = `累计 ${t.streak} 圈 · 最近 ${t.last}`;
+}
+
+document.getElementById('checkBtn').addEventListener('click', () => {
+  if (!selected || selected.state === 'done') return;
+  selected.state = 'done'; selected.tail = 0.12; selected.streak++;
+  const hm = new Date().toTimeString().slice(0, 5);
+  selected.last = hm;
+  renderCore(); refreshHeader();
+});
+document.getElementById('btnCheckAll').addEventListener('click', () => {
+  tasks.forEach(t => { if (t.state !== 'done') { t.state = 'done'; t.tail = 0.18; t.streak++; } });
+  if (selected) renderCore(); refreshHeader();
+});
+document.getElementById('btnReset').addEventListener('click', () => location.reload());
+document.getElementById('demoToggle').addEventListener('click', () => {
+  const p = document.getElementById('demoPanel');
+  p.hidden = !p.hidden;
+});
+
+function refreshHeader() {
+  const done = tasks.filter(t => t.state === 'done').length;
+  document.getElementById('hdrSub').textContent = `TODAY ${done}/${tasks.length} · LIT ${done}`;
+}
+(function initHeader() {
+  const d = new Date();
+  const wd = '日一二三四五六'[d.getDay()];
+  document.getElementById('hdrDate').textContent = `${d.getMonth() + 1}月${d.getDate()}日 · 周${wd}`;
+  refreshHeader();
+})();
+
+addEventListener('resize', resize); resize();
+
+// 测试/演示钩子
+window.__app = {
+  tasks,
+  select: id => { selected = tasks.find(x => x.id === id); renderCore(); },
+  deselect: () => { selected = null; renderCore(); },
+};
+</script>
+</body>
+</html>

@@ -1,10 +1,15 @@
 package com.mengpolar.dailycheck
 
+import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -15,8 +20,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mengpolar.dailycheck.data.CheckRecord
+import com.mengpolar.dailycheck.data.TaskUi
 import com.mengpolar.dailycheck.data.TaskViewModel
-import com.mengpolar.dailycheck.ui.HomeScreen
+import com.mengpolar.dailycheck.ui.CropScreen
+import com.mengpolar.dailycheck.ui.OrbitScreen
 import com.mengpolar.dailycheck.ui.SettingsScreen
 import com.mengpolar.dailycheck.ui.TaskDetailScreen
 import com.mengpolar.dailycheck.ui.TaskEditSheet
@@ -29,7 +36,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            DailyCheckTheme {
+            // 星空语言：全局锁定深色
+            DailyCheckTheme(darkTheme = true) {
                 App()
             }
         }
@@ -41,17 +49,23 @@ private fun App() {
     val taskVm: TaskViewModel = viewModel()
     val updateVm: UpdateViewModel = viewModel()
 
-    val homeState by taskVm.homeState.collectAsState()
+    val orbitState by taskVm.orbitState.collectAsState()
     val detailState by taskVm.detailState.collectAsState()
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showEditSheet by rememberSaveable { mutableStateOf(false) }
     var editTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var pendingImage by remember { mutableStateOf<Bitmap?>(null) } // 新建流程暂存的行星图
+    var cropUri by remember { mutableStateOf<Uri?>(null) }
+
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) cropUri = uri }
 
     // 启动时静默检查更新
     LaunchedEffect(Unit) { updateVm.autoCheckOnLaunch() }
 
-    // 返回键处理：详情页返回首页，设置页返回
+    BackHandler(enabled = cropUri != null) { cropUri = null }
     BackHandler(enabled = showSettings) { showSettings = false }
     BackHandler(enabled = !showSettings && detailState != null) { taskVm.openDetail(null) }
 
@@ -76,29 +90,67 @@ private fun App() {
                 onUndo = { taskVm.undoCheck(it) },
             )
         }
-        else -> HomeScreen(
-            state = homeState,
+        else -> OrbitScreen(
+            state = orbitState,
             onAdd = { openEdit(null) },
-            onOpenTask = { taskVm.openDetail(it) },
+            onOpenSettings = { showSettings = true },
+            onOpenRecords = { taskVm.openDetail(it) },
             onCheck = checkIn,
             onUndo = { taskVm.undoCheck(it) },
-            onOpenSettings = { showSettings = true },
         )
     }
 
     if (showEditSheet) {
-        val initial = editTaskId?.let { id -> homeState.pending.firstOrNull { it.id == id } ?: homeState.done.firstOrNull { it.id == id } }
+        val initial = editTaskId?.let { id ->
+            orbitState.items.firstOrNull { it.id == id }?.let { o ->
+                TaskUi(
+                    id = o.id,
+                    name = o.name,
+                    note = o.note,
+                    cycleType = o.cycleType,
+                    intervalDays = o.intervalDays,
+                    anchorMin = o.anchorMin,
+                    cycleLabel = o.cycleLabel,
+                    anchorLabel = o.anchorLabel,
+                    done = o.state == com.mengpolar.dailycheck.data.PlanetState.DONE,
+                    statusText = "",
+                    hasImage = o.hasImage,
+                )
+            }
+        }
         TaskEditSheet(
             initial = initial,
+            pendingImage = pendingImage,
+            imageSet = initial?.hasImage == true,
+            onPickImage = {
+                pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onRemoveImage = {
+                val id = editTaskId
+                if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
+            },
             onDismiss = { showEditSheet = false },
-            onSave = { id, name, note, cycleType, intervalDays ->
+            onSave = { id, name, note, cycleType, intervalDays, anchorMin, image ->
                 if (id == null) {
-                    taskVm.addTask(name, note, cycleType, intervalDays)
+                    taskVm.addTaskWithImage(name, note, cycleType, intervalDays, anchorMin, image)
                 } else {
-                    taskVm.editTask(id, name, note, cycleType, intervalDays)
+                    taskVm.editTask(id, name, note, cycleType, intervalDays, anchorMin)
                 }
+                pendingImage = null
                 showEditSheet = false
             },
+        )
+    }
+
+    cropUri?.let { uri ->
+        CropScreen(
+            uri = uri,
+            onConfirm = { bmp ->
+                val id = editTaskId
+                if (id != null) taskVm.setPlanetImage(id, bmp) else pendingImage = bmp
+                cropUri = null
+            },
+            onCancel = { cropUri = null },
         )
     }
 
