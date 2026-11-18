@@ -1,6 +1,9 @@
 package com.mengpolar.dailycheck.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -15,7 +18,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.mengpolar.dailycheck.update.UpdateManager
 import com.mengpolar.dailycheck.update.UpdateState
 import com.mengpolar.dailycheck.update.UpdateViewModel
 import java.util.Locale
@@ -24,6 +29,7 @@ import java.util.Locale
 fun UpdateDialogs(vm: UpdateViewModel) {
     val state by vm.state.collectAsState()
     val needsPermission by vm.needsInstallPermission.collectAsState()
+    val context = LocalContext.current
 
     when (val s = state) {
         is UpdateState.Available -> {
@@ -104,7 +110,7 @@ fun UpdateDialogs(vm: UpdateViewModel) {
             AlertDialog(
                 onDismissRequest = { vm.dismiss() },
                 title = { Text("更新失败") },
-                text = { Text(s.message) },
+                text = { Text(s.message + "\n\n可尝试打开发布页手动下载安装。") },
                 confirmButton = {
                     TextButton(onClick = {
                         when (s.retry) {
@@ -114,7 +120,16 @@ fun UpdateDialogs(vm: UpdateViewModel) {
                     }) { Text("重试") }
                 },
                 dismissButton = {
-                    TextButton(onClick = { vm.dismiss() }) { Text("关闭") }
+                    Row {
+                        TextButton(onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(UpdateManager.RELEASES_PAGE_URL))
+                                )
+                            }
+                        }) { Text("打开下载页") }
+                        TextButton(onClick = { vm.dismiss() }) { Text("关闭") }
+                    }
                 },
             )
         }

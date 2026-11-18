@@ -24,6 +24,7 @@ import java.time.Duration
 object UpdateManager {
 
     const val REPO_URL = "https://github.com/Mengpolar/DailyCheck-in"
+    const val RELEASES_PAGE_URL = "https://github.com/Mengpolar/DailyCheck-in/releases"
     private const val API_URL = "https://api.github.com/repos/Mengpolar/DailyCheck-in/releases/latest"
     /** 下载加速代理：拼接在 GitHub 文件原始地址前即可 */
     const val PROXY_PREFIX = "https://gh-proxy.org/"
@@ -31,7 +32,11 @@ object UpdateManager {
     /** 下载源候选（镜像前缀，空串 = GitHub 直连），按顺序逐一尝试 */
     val DOWNLOAD_MIRRORS = listOf(
         "https://gh-proxy.org/",
+        "https://gh-proxy.com/",
+        "https://ghproxy.net/",
         "https://ghfast.top/",
+        "https://gh.llkk.cc/",
+        "https://hub.gitmirror.com/",
         "",
     )
 
