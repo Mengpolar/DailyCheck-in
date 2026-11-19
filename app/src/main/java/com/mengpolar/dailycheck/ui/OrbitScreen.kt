@@ -112,8 +112,6 @@ private val DueColor = Color(0xFFB9C2D4)
 private val CardBg = Color(0x8C080A10)
 private val CardBorder = Color(0x24D8DEEE)
 
-private val RING_DEFS = floatArrayOf(150f, 208f, 264f)
-
 /** 长按打卡所需时长（秒）：按住每秒 +1，松手每秒 -1 */
 private const val CHECK_HOLD_S = 3f
 
@@ -127,27 +125,32 @@ private class Geo(
     val q: Float, val radiiPx: List<Float>, val s: Float,
     /** 相机缩放（1 = 全景），聚焦时 = 目标倍率 × 聚焦进度 */
     val zoom: Float = 1f,
+    /** 行星尺寸系数：轨道盘被压缩时行星随之略微缩小 */
+    val planetScale: Float = 1f,
 ) {
     /** dp 常数转 px */
     fun dp(v: Float) = v * s
 }
 
-private fun computeGeo(wPx: Float, hPx: Float, d: Float): Geo {
-    val q = if (hPx > wPx * 1.15f) 0.62f else 0.42f
+private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ: Float): Geo {
     val s = d
     val capX = wPx / 2f - 26f * s
     val capY = hPx / 2f * 0.92f - 26f * s
-    val baseScale = (wPx / 2f - 20f * s) / (264f + 30f)
-    val radii = RING_DEFS.map { it * baseScale * s }.toMutableList()
-    radii[0] = maxOf(radii[0], 58f * s)
-    radii[1] = maxOf(radii[1], radii[0] + 52f * s)
-    radii[2] = maxOf(radii[2], radii[1] + 52f * s)
     val cap = minOf(capX, capY)
-    if (radii[2] > cap) {
-        val sp = maxOf(26f * s, (cap - 90f * s) / 2f)
-        radii.clear(); radii.addAll(listOf(90f * s, 90f * s + sp, 90f * s + 2f * sp))
+    // 每任务一条独立轨道：由内向外 150dp 起步、间距 60dp；
+    // 放不下时整盘等比缩小让最外圈完整展示；仅一条轨道时放大展示
+    val radii: List<Float> = when {
+        orbitCount <= 0 -> emptyList()
+        orbitCount == 1 -> listOf(cap * 0.60f)
+        else -> {
+            val outerDp = 150f + 60f * (orbitCount - 1)
+            val scale = minOf(1f, cap / (outerDp * s))
+            (0 until orbitCount).map { i -> (150f + 60f * i) * scale * s }
+        }
     }
-    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, q, radii, s)
+    val planetScale = if (orbitCount <= 1) 1f
+        else (radii.lastOrNull()?.let { it / ((150f + 60f * (orbitCount - 1)) * s) } ?: 1f).coerceIn(0.62f, 1f)
+    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScale)
 }
 
 /** 相机变换：K 为镜头中心（显示在屏幕中央的世界点），camScale 为倍率；camScale=1 且 K=几何中心时为恒等 */
@@ -159,6 +162,7 @@ private fun transformGeo(g: Geo, camScale: Float, kx: Float, ky: Float): Geo = G
     radiiPx = g.radiiPx.map { it * camScale },
     s = g.s,
     zoom = camScale,
+    planetScale = g.planetScale,
 )
 
 private fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
@@ -166,12 +170,12 @@ private fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 private class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
 private fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
-    val a = planetAngle(t.frac) + t.jitterDeg * Math.PI.toFloat() / 180f
+    val a = planetAngle(t.frac)
     val R = g.radiiPx[t.ring]
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
-    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * g.s * g.zoom * (0.85f + 0.35f * nearness)
+    val pr = 18f * g.planetScale * g.s * g.zoom * (0.85f + 0.35f * nearness)
     return PlanetPos(x, y, nearness, pr)
 }
 
@@ -330,9 +334,12 @@ fun OrbitScreen(
         }.getOrNull()
     }
 
+    // 轨道盘倾角：q = 0.16（近侧视）~ 1（正俯视），空白区上下滑动调节
+    var tiltQ by remember { mutableFloatStateOf(0.62f) }
+
     // 诊断几何（与 Canvas 内一致）
-    val diagGeo = remember(viewSize) {
-        computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+    val diagGeo = remember(viewSize, state.items.size, tiltQ) {
+        computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltQ)
     }
 
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
@@ -374,11 +381,20 @@ fun OrbitScreen(
         Canvas(
             Modifier
                 .fillMaxSize()
+                .pointerInput(Unit) {
+                    // 空白区上下滑动：调整轨道盘倾角（中心固定，绕 X 轴倾斜）
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            tiltQ = (tiltQ - dragAmount / 550f).coerceIn(0.16f, 1f)
+                        },
+                    )
+                }
                 .pointerInput(state.items, viewSize) {
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
-                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltQ)
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
                         val selNow = state.items.firstOrNull { it.id == selectedId } ?: recentSelected
@@ -412,7 +428,7 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g0 = computeGeo(size.width, size.height, d)
+            val g0 = computeGeo(size.width, size.height, d, state.items.size, tiltQ)
             val z = zoom.value
             // 相机：行星先原地放大（前 40% 行程），随后在放大过程中缓缓滑向屏幕中心；
             // 落定时行星居中且直径≈屏宽。退焦沿同一曲线反向（先滑回轨道位置、再原地缩小）。

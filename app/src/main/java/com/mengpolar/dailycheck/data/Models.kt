@@ -110,13 +110,6 @@ fun Task.cycleLabel(): String = when (intervalDays.coerceAtLeast(1)) {
     else -> "每 ${intervalDays.coerceAtLeast(1)} 天"
 }
 
-/** 轨道分层：每天最内圈，每周中圈，更长周期外圈 */
-fun Task.orbitRing(): Int = when {
-    intervalDays <= 1 -> 0
-    intervalDays <= 7 -> 1
-    else -> 2
-}
-
 fun formatWindowStart(ms: Long): String {
     val t = Instant.ofEpochMilli(ms).atZone(ZONE)
     return "${t.monthValue}/${t.dayOfMonth} %02d:%02d".format(t.hour, t.minute)

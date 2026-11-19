@@ -33,9 +33,8 @@ data class OrbitTask(
     /** 彗尾长度 0..1（打卡后随时间淡出） */
     val tail: Float,
     val hue: Int,
+    /** 轨道序号 = 创建顺序（每个任务一条独立轨道，由内向外） */
     val ring: Int,
-    /** 同轨道多颗行星的相位错开角度（仅视觉，时间语义不变） */
-    val jitterDeg: Float,
     val nextText: String,
     val circleNo: Int,
     val lastCheckText: String,
@@ -121,12 +120,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun computeOrbit(d: AppData, nowMs: Long): OrbitUiState {
         val today = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
-        // 同轨道行星按创建顺序错开 10° 相位，避免完全重叠
-        val jitterMap = mutableMapOf<Long, Float>()
-        d.tasks.groupBy { it.orbitRing() }.forEach { (_, list) ->
-            list.forEachIndexed { j, t -> jitterMap[t.id] = j * 40f }
-        }
-        val items = d.tasks.map { task ->
+        val items = d.tasks.mapIndexed { index, task ->
             val lastMs = lastCheckMs(d, task.id)
             val state = task.planetState(nowMs, lastMs)
             val done = state == PlanetState.DONE
@@ -148,8 +142,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 frac = task.periodFraction(nowMs),
                 tail = tail,
                 hue = hueOf(task.name),
-                ring = task.orbitRing(),
-                jitterDeg = jitterMap[task.id] ?: 0f,
+                ring = index,
                 nextText = nextText(task, state, nowMs),
                 circleNo = records.size + 1,
                 lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
