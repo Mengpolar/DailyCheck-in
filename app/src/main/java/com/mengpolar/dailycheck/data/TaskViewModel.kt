@@ -40,6 +40,8 @@ data class OrbitTask(
     val circleNo: Int,
     val lastCheckText: String,
     val recordCount: Int,
+    /** 当前周期窗口结束时刻（epoch ms），聚焦页倒计时用 */
+    val periodEndMs: Long,
     val hasImage: Boolean,
     val imagePath: String?,
 )
@@ -129,9 +131,9 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             val state = task.planetState(nowMs, lastMs)
             val done = state == PlanetState.DONE
             val records = d.records.filter { it.taskId == task.id }
+            val window = task.periodWindow(nowMs)
             val tail = if (done && lastMs != null) {
-                val w = task.periodWindow(nowMs)
-                (1f - ((nowMs - lastMs).toFloat() / w.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
+                (1f - ((nowMs - lastMs).toFloat() / window.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
             } else 0f
             OrbitTask(
                 id = task.id,
@@ -152,6 +154,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 circleNo = records.size + 1,
                 lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
                 recordCount = records.size,
+                periodEndMs = window.endMs,
                 hasImage = task.imagePath != null,
                 imagePath = task.imagePath,
             )

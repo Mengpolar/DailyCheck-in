@@ -74,14 +74,18 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
@@ -113,6 +117,13 @@ private val CardBg = Color(0x8C080A10)
 private val CardBorder = Color(0x24D8DEEE)
 
 private val RING_DEFS = floatArrayOf(150f, 208f, 264f)
+
+/** 长按打卡所需时长（秒）：按住每秒 +1，松手每秒 -1 */
+private const val CHECK_HOLD_S = 3f
+
+/** 聚焦页按钮默认底色（灰黑）与长按填充的淡金 */
+private val BtnBg = Color(0xE6202630)
+private val HoldGold = Color(0xFFDFBE7E)
 
 /** 几何：以 dp 为单位（Canvas 内按屏幕密度整体缩放） */
 private class Geo(
@@ -345,6 +356,34 @@ fun OrbitScreen(
         }
     }
 
+    // 长按打卡：按住填充（每秒 +1），松手渐退（每秒 -1），满 3 秒完成打卡并点亮行星
+    var holdDown by remember { mutableStateOf(false) }
+    val holdProgress = remember { mutableFloatStateOf(0f) }
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(selectedId) {
+        holdDown = false
+        holdProgress.floatValue = 0f
+        if (selectedId == null) return@LaunchedEffect
+        val task = state.items.firstOrNull { it.id == selectedId } ?: return@LaunchedEffect
+        var last = withFrameNanos { it }
+        var logTick = 0
+        while (true) {
+            val now = withFrameNanos { it }
+            val dt = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.1f)
+            last = now
+            val next = if (holdDown) holdProgress.floatValue + dt else holdProgress.floatValue - dt
+            val v = next.coerceIn(0f, CHECK_HOLD_S)
+            holdProgress.floatValue = v
+            if (++logTick % 30 == 0) Log.d("OrbitCanvas", "hold loop p=$v down=$holdDown")
+            if (holdDown && v >= CHECK_HOLD_S) {
+                holdDown = false
+                holdProgress.floatValue = 0f
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                doCheck(task)
+            }
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -453,7 +492,12 @@ fun OrbitScreen(
                 drawOrbitLayer(g)
                 drawAnchorTicks(g, state.items, z)
                 state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
-                    drawTask(g, t, timeMs, z, selected, planetImages, dimmed = selected != null && selected.id != t.id)
+                    drawTask(
+                        g, t, timeMs, z, selected, planetImages,
+                        dimmed = selected != null && selected.id != t.id,
+                        fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
+                            (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
+                    )
                 }
 
                 // 点击星光（最上层）
@@ -472,91 +516,131 @@ fun OrbitScreen(
             }
         }
 
-        // 毛玻璃信息卡：镜头推近后浮现；退焦动画期间沿用最后选中任务，随缩放淡出
+        // ── 聚焦态界面 ── 退焦动画期间沿用最后选中任务，随缩放淡出
         val cardTask = selected ?: recentSelected.takeIf { zoom.value > 0.55f }
         if (cardTask != null) {
-            val selected = cardTask   // 局部别名：卡内引用沿用原变量名
+            val t = cardTask
             val pa = ((zoom.value - 0.55f) / 0.45f).coerceIn(0f, 1f)
-            val statusColor = when (selected.state) {
-                PlanetState.DONE -> GoldColor
+            val fillFrac = (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
+            val done = t.state == PlanetState.DONE
+            val remainingMs = (t.periodEndMs - System.currentTimeMillis()).coerceAtLeast(0L)
+            val remainColor = when (t.state) {
                 PlanetState.LATE -> LateColor
+                PlanetState.NEAR -> GoldColor
                 else -> Color(0xFFB9C2D4)
             }
-            val statusText = when (selected.state) {
-                PlanetState.DONE -> "✓ 本周期已点亮"
-                PlanetState.LATE -> "⚠ 已逾期 · 正在熄灭"
-                PlanetState.NEAR -> "临近到期 · 若隐若现"
-                PlanetState.PENDING -> "待打卡 · 黑白星"
+
+            // 顶部信息卡：任务名称 / 周期 / 倒计时 / 已完成周期数；聚焦时从上往下出现，退焦反向
+            Box(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 44.dp, start = 18.dp, end = 18.dp)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        alpha = pa
+                        translationY = -(1f - pa) * 90f
+                    }
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xC010141A))
+                    .border(1.dp, Color(0x24FFFFFF), RoundedCornerShape(24.dp))
+                    .pointerInput(Unit) { detectTapGestures { } }   // 消费卡内点击，避免透传退焦
+                    .padding(horizontal = 22.dp, vertical = 16.dp),
+            ) {
+                Column {
+                    Text(
+                        t.name,
+                        color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
+                        letterSpacing = 2.sp, maxLines = 1,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
+                        color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
+                        color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp,
+                    )
+                    if (t.note.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(t.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                    }
+                }
             }
+
+            // 底部操作卡：编辑 / 长按打卡 / 历史；聚焦时从下往上出现，退焦反向
             Box(
                 Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 18.dp, end = 18.dp, bottom = 26.dp)
+                    .padding(start = 18.dp, end = 18.dp, bottom = 32.dp)
                     .fillMaxWidth()
                     .graphicsLayer {
                         alpha = pa
                         translationY = (1f - pa) * 90f
                     }
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(Color(0xD910141A))
-                    .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(28.dp))
-                    .pointerInput(Unit) { detectTapGestures { } }   // 消费面板内点击，避免透传退焦
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                    // 仅占位命中路径挡住点按透传（空 handler 不消费事件，子按钮才能收到按压）
+                    .pointerInput(Unit) { }
             ) {
-                Column {
-                    Text(
-                        selected.name,
-                        color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
-                        letterSpacing = 2.sp, maxLines = 1,
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        "${selected.cycleLabel} · 第 ${selected.circleNo} 圈 · 累计 ${selected.recordCount} 次",
-                        color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(statusText, color = statusColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
-                    if (selected.note.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(selected.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        Modifier
+                            .weight(0.8f).height(52.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(BtnBg)
+                            .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(14.dp))
+                            .clickable { onEdit(t.id) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("编辑", color = InkColor, fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
                     }
-                    Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = { doCheck(selected) },
-                            enabled = selected.state != PlanetState.DONE,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = GoldColor,
-                                contentColor = Color(0xFF1A1408),
-                                disabledContainerColor = Color(0x44D8B36A),
-                                disabledContentColor = Color(0x88D8B36A),
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.15f).height(44.dp),
-                        ) {
-                            Text(
-                                if (selected.state == PlanetState.DONE) "✓ 已打卡" else "打 卡",
-                                fontFamily = FontFamily.Serif, fontSize = 13.sp, letterSpacing = 2.sp,
+                    Box(
+                        Modifier
+                            .weight(1.4f).height(52.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(BtnBg)
+                            .border(
+                                1.dp,
+                                if (fillFrac > 0f) Color(0x66D8B36A) else Color(0x2EFFFFFF),
+                                RoundedCornerShape(14.dp),
                             )
+                            .pointerInput(t.id, done) {
+                                if (!done) detectTapGestures(
+                                    onPress = {
+                                        Log.d("OrbitCanvas", "hold press START")
+                                        holdDown = true
+                                        try { awaitRelease() } finally { Log.d("OrbitCanvas", "hold press END"); holdDown = false }
+                                    },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // 长按填充层：从左往右逐渐铺满淡金色
+                        Canvas(Modifier.matchParentSize()) {
+                            if (fillFrac > 0f) {
+                                drawRect(HoldGold, size = Size(size.width * fillFrac, size.height))
+                            }
                         }
-                        OutlinedButton(
-                            onClick = { onEdit(selected.id) },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Color(0x3DD8DEEE)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = InkColor),
-                            modifier = Modifier.weight(0.8f).height(44.dp),
-                        ) {
-                            Text("编辑", fontSize = 13.sp, fontFamily = FontFamily.Serif)
-                        }
-                        OutlinedButton(
-                            onClick = { onOpenRecords(selected.id) },
-                            shape = RoundedCornerShape(12.dp),
-                            border = BorderStroke(1.dp, Color(0x3DD8DEEE)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = InkColor),
-                            modifier = Modifier.weight(0.8f).height(44.dp),
-                        ) {
-                            Text("记录", fontSize = 13.sp, fontFamily = FontFamily.Serif)
-                        }
+                        Text(
+                            when {
+                                done -> "✓ 本周期已点亮"
+                                fillFrac > 0f -> "${(fillFrac * 100).toInt()}%"
+                                else -> "长按打卡"
+                            },
+                            color = if (done) GoldDim else lerp(InkColor, Color(0xFF241A08), fillFrac),
+                            fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .weight(0.8f).height(52.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(BtnBg)
+                            .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(14.dp))
+                            .clickable { onOpenRecords(t.id) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("历史", color = InkColor, fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
                     }
                 }
             }
@@ -611,26 +695,35 @@ private fun ArcNavBar(
     }
 
     val heightDp = 40.dp + 100.dp * progress
+    // 聚焦淡出（dim→1）时整条弧必须对命中测试透明：不挂 pointerInput、不组合按钮行，
+    // 否则它的空手势节点会遮住聚焦页底部按钮的按压事件
+    val interactive = dim <= 0.5f
     // 外层为触摸热区盒：比视觉月面高 64dp，弧上方的轻点/上滑也能命中
     Box(
         modifier
             .fillMaxWidth()
             .height(heightDp + 64.dp)
             .graphicsLayer { alpha = (1f - dim).coerceIn(0f, 1f) }
-            .pointerInput(dim > 0.5f) {
-                if (dim <= 0.5f) detectVerticalDragGestures { change, dragAmount ->
-                    change.consume()
-                    val next = (anim.value - dragAmount / 240f).coerceIn(0f, 1f)
-                    target = next
-                    scope.launch { anim.snapTo(next) } // 拖动跟手
-                }
-            }
-            .pointerInput(dim > 0.5f) {
-                if (dim <= 0.5f) detectTapGestures {
-                    Log.d("OrbitCanvas", "arc tapped, anim=${anim.value} -> ${if (anim.value > 0.5f) 0 else 1}")
-                    target = if (anim.value > 0.5f) 0f else 1f
-                }
-            },
+            .then(
+                if (interactive) {
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { change, dragAmount ->
+                                change.consume()
+                                val next = (anim.value - dragAmount / 240f).coerceIn(0f, 1f)
+                                target = next
+                                scope.launch { anim.snapTo(next) } // 拖动跟手
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                Log.d("OrbitCanvas", "arc tapped, anim=${anim.value} -> ${if (anim.value > 0.5f) 0 else 1}")
+                                target = if (anim.value > 0.5f) 0f else 1f
+                            }
+                        }
+                } else Modifier
+                ,
+            ),
     ) {
         // 视觉月面：月球圆盘自转，上缘即弧形地平线；随 progress 刚性升起
         Canvas(
@@ -690,35 +783,37 @@ private fun ArcNavBar(
             }
         }
         val clickable = progress > 0.5f && dim <= 0.5f
-        Row(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = (6.dp + 18.dp * progress))
-                .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
-            horizontalArrangement = Arrangement.spacedBy(44.dp),
-        ) {
-            listOf(
-                R.drawable.ic_star_add to onAdd,
-                R.drawable.ic_setting_btn to onOpenSettings,
-            ).forEach { (iconRes, onClick) ->
-                Box(contentAlignment = Alignment.Center) {
-                    // 轻微黑色光晕：黑图标在亮月面上的衬底
-                    Box(
-                        Modifier
-                            .size(68.dp)
-                            .background(
-                                Brush.radialGradient(
-                                    listOf(Color(0x59000000), Color(0x00000000))
+        if (interactive) {
+            Row(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = (6.dp + 18.dp * progress))
+                    .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
+                horizontalArrangement = Arrangement.spacedBy(44.dp),
+            ) {
+                listOf(
+                    R.drawable.ic_star_add to onAdd,
+                    R.drawable.ic_setting_btn to onOpenSettings,
+                ).forEach { (iconRes, onClick) ->
+                    Box(contentAlignment = Alignment.Center) {
+                        // 轻微黑色光晕：黑图标在亮月面上的衬底
+                        Box(
+                            Modifier
+                                .size(68.dp)
+                                .background(
+                                    Brush.radialGradient(
+                                        listOf(Color(0x59000000), Color(0x00000000))
+                                    )
                                 )
-                            )
-                    )
-                    IconButton(onClick = onClick, enabled = clickable) {
-                        Icon(
-                            painter = painterResource(iconRes),
-                            contentDescription = null,
-                            tint = Color.Black,
-                            modifier = Modifier.size(40.dp),
                         )
+                        IconButton(onClick = onClick, enabled = clickable) {
+                            Icon(
+                                painter = painterResource(iconRes),
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(40.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -748,6 +843,19 @@ private fun processMoon(src: Bitmap): Bitmap {
     val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     out.setPixels(px, 0, w, 0, 0, w, h)
     return out
+}
+
+/** 剩余时长文案：X 天 X 小时 / X 小时 X 分 / X 分钟 */
+private fun formatRemaining(ms: Long): String {
+    val totalMin = ms / 60_000L
+    val d = totalMin / 1440
+    val h = (totalMin % 1440) / 60
+    val m = totalMin % 60
+    return when {
+        d >= 1 -> "$d 天 $h 小时"
+        h >= 1 -> "$h 小时 $m 分"
+        else -> "$m 分钟"
+    }
 }
 
 private data class Spark(
@@ -885,6 +993,7 @@ private fun DrawScope.drawTask(
     selected: OrbitTask?,
     images: Map<Long, ImageBitmap>,
     dimmed: Boolean,
+    fill: Float,
 ) {
     val p = planetPos(g, t)
     if (timeMs % 2000L < 20L) {
@@ -977,8 +1086,34 @@ private fun DrawScope.drawTask(
             RectF(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r),
             paint,
         )
+        // 长按打卡填充：从下往上恢复行星原本的颜色（仅聚焦选中且未完成时）
+        if (sel && !done && fill > 0f) {
+            planetPaintNormal.alpha = (alpha * 255).toInt()
+            clipRect(
+                left = p.x - p.r,
+                top = p.y + p.r - 2f * p.r * fill,
+                right = p.x + p.r,
+                bottom = p.y + p.r,
+            ) {
+                drawContext.canvas.nativeCanvas.drawBitmap(
+                    bmp.asAndroidBitmap(), null,
+                    RectF(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r),
+                    planetPaintNormal,
+                )
+            }
+        }
     } else {
         drawProceduralPlanet(p.x, p.y, p.r, t.hue, done, alpha)
+        if (sel && !done && fill > 0f) {
+            clipRect(
+                left = p.x - p.r,
+                top = p.y + p.r - 2f * p.r * fill,
+                right = p.x + p.r,
+                bottom = p.y + p.r,
+            ) {
+                drawProceduralPlanet(p.x, p.y, p.r, t.hue, true, alpha)
+            }
+        }
     }
     // 液态玻璃质感：球面暗角 + 边缘亮环（高光斑移除——聚焦放大后会显形为一个圆叠在行星上）
     drawCircle(
