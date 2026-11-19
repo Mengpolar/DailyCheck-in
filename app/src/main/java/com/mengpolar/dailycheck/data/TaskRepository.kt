@@ -28,6 +28,7 @@ class TaskRepository private constructor(private val context: Context) {
         if (!file.exists()) return
         try {
             data = json.decodeFromString(AppData.serializer(), migrateLegacy(file.readText()))
+            healOrphanPlanetImages()
         } catch (e: Exception) {
             // 数据损坏时备份原文件并重新开始，避免崩溃循环
             runCatching { file.copyTo(File(file.parentFile, "dailycheck_data_backup.json"), overwrite = true) }
@@ -78,7 +79,7 @@ class TaskRepository private constructor(private val context: Context) {
         name: String, note: String,
         intervalDays: Int, anchorMin: Int, image: Bitmap?,
     ): Task = synchronized(lock) {
-        val task = Task(
+        var task = Task(
             id = data.nextTaskId,
             name = name.trim(),
             note = note.trim(),
@@ -86,8 +87,11 @@ class TaskRepository private constructor(private val context: Context) {
             anchorMin = anchorMin.coerceIn(0, 1439),
             createdEpochDay = LocalDate.now().toEpochDay(),
         )
+        if (image != null) {
+            savePlanetImageLocked(task.id, image)
+            task = task.copy(imagePath = planetImagePath(task.id))
+        }
         data = data.copy(tasks = data.tasks + task, nextTaskId = data.nextTaskId + 1)
-        if (image != null) savePlanetImageLocked(task.id, image)
         persist()
         task
     }
@@ -170,6 +174,20 @@ class TaskRepository private constructor(private val context: Context) {
 
     private fun deletePlanetImageLocked(taskId: Long) {
         runCatching { File(planetsDir, "task_$taskId.png").delete() }
+    }
+
+    /** 历史版本写入过行星图片文件但未记录 imagePath，加载时自动找回 */
+    private fun healOrphanPlanetImages() {
+        val healed = data.tasks.map { t ->
+            if (t.imagePath == null) {
+                val f = File(context.filesDir, "planets/task_${t.id}.png")
+                if (f.exists()) t.copy(imagePath = "planets/task_${t.id}.png") else t
+            } else t
+        }
+        if (healed != data.tasks) {
+            data = data.copy(tasks = healed)
+            persist()
+        }
     }
 
     companion object {

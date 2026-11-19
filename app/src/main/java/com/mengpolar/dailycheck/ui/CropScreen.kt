@@ -96,6 +96,25 @@ fun CropScreen(
         circleR = minOf(viewSize.width, viewSize.height) * 0.36f
     }
 
+    // 圆选区（中心 circleR）必须完整落在显示图片内：偏移钳制到极限位置
+    fun clampOffsetToImage() {
+        val bmp = source ?: return
+        if (viewSize == IntSize.Zero || circleR <= 0f) return
+        val bs = minOf(viewSize.width.toFloat() / bmp.width, viewSize.height.toFloat() / bmp.height)
+        val total = bs * scale
+        val imgLeft0 = (viewSize.width - bmp.width * total) / 2f
+        val imgTop0 = (viewSize.height - bmp.height * total) / 2f
+        val cx = viewSize.width / 2f; val cy = viewSize.height / 2f
+        val maxX = cx - circleR - imgLeft0
+        val minX = cx + circleR - imgLeft0 - bmp.width * total
+        val maxY = cy - circleR - imgTop0
+        val minY = cy + circleR - imgTop0 - bmp.height * total
+        offset = Offset(
+            offset.x.coerceIn(minOf(minX, maxX), maxOf(minX, maxX)),
+            offset.y.coerceIn(minOf(minY, maxY), maxOf(minY, maxY)),
+        )
+    }
+
     // 初始缩放：保证圆区被图片覆盖
     LaunchedEffect(source, viewSize) {
         val bmp = source ?: return@LaunchedEffect
@@ -107,6 +126,8 @@ fun CropScreen(
         minScale = if (bs > 0f) (circleR * 2f) / (minOf(bmp.width, bmp.height) * bs) else 1f
         scale = maxOf(1f, minScale)
         offset = Offset.Zero
+   
+        clampOffsetToImage()
     }
 
     Column(
@@ -201,6 +222,7 @@ fun CropScreen(
                             detectTransformGestures { _, pan, zoom, _ ->
                                 scale = (scale * zoom).coerceIn(minScale, 8f)
                                 offset += pan
+                                clampOffsetToImage()
                             }
                         },
                 )
