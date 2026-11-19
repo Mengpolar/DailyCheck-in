@@ -581,38 +581,15 @@ private fun ArcNavBar(
     }
 }
 
-/** 月图处理：定位实心月盘（alpha>128）的真实圆心，圆内强制不透明，裁剪为居中方形
- *  原图月盘圆心偏离画布中心且左上缺角——旋转轴必须用月盘真实圆心，否则公转式摆出屏幕 */
+/** 月图处理：实心灰白底圆 + 月图叠加（补满原图半透明），输出圆形月盘 */
 private fun processMoon(src: Bitmap): Bitmap {
-    val w = src.width; val h = src.height
-    val px = IntArray(w * h)
-    src.getPixels(px, 0, w, 0, 0, w, h)
-    var minX = w; var minY = h; var maxX = -1; var maxY = -1
-    for (i in px.indices) {
-        if (px[i] ushr 24 > 128) {
-            val x = i % w; val y = i / w
-            if (x < minX) minX = x
-            if (x > maxX) maxX = x
-            if (y < minY) minY = y
-            if (y > maxY) maxY = y
-        }
-    }
-    if (maxX < 0) return src
-    val diskCx = (minX + maxX) / 2f; val diskCy = (minY + maxY) / 2f
-    val diskR = maxOf(maxX - minX, maxY - minY) / 2f + 2f
-    // 圆内强制不透明（原图月面整体半透明），圆外透明
-    val rr = diskR * diskR
-    for (i in px.indices) {
-        val x = (i % w).toFloat(); val y = (i / w).toFloat()
-        val inside = (x - diskCx) * (x - diskCx) + (y - diskCy) * (y - diskCy) <= rr
-        px[i] = if (inside) px[i] or (0xFF shl 24) else px[i] and 0x00FFFFFF
-    }
-    // 裁剪为以月盘圆心为中心的方形
-    val side = (diskR * 2f).toInt().coerceAtMost(minOf(w, h))
-    val l = (diskCx - side / 2f).toInt().coerceIn(0, w - side)
-    val t = (diskCy - side / 2f).toInt().coerceIn(0, h - side)
+    val side = minOf(src.width, src.height)
     val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-    out.setPixels(px, 0, w, l, t, side, side)
+    val c = android.graphics.Canvas(out)
+    val p1 = Paint().apply { isAntiAlias = true; color = 0xFFB4B4B0.toInt() }
+    c.drawCircle(side / 2f, side / 2f, side / 2f - 1f, p1)
+    val p2 = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
+    c.drawBitmap(src, null, RectF(0f, 0f, side.toFloat(), side.toFloat()), p2)
     return out
 }
 
@@ -968,16 +945,16 @@ private fun DrawScope.drawTask(
     drawCircle(
         Brush.radialGradient(
             listOf(Color(0x4DFFFFFF), Color(0x00FFFFFF)),
-            center = Offset(p.x - p.r * 0.35f, p.y - p.r * 0.42f), radius = p.r * 0.75f,
+            center = Offset(p.x - p.r * 0.28f, p.y - p.r * 0.33f), radius = p.r * 0.52f,
         ),
-        p.r * 0.75f, Offset(p.x - p.r * 0.35f, p.y - p.r * 0.42f),
+        p.r * 0.52f, Offset(p.x - p.r * 0.28f, p.y - p.r * 0.33f),
     )
     drawCircle(
         Brush.radialGradient(
             listOf(Color(0x00FFFFFF), Color(0x2EFFFFFF)),
-            center = Offset(p.x + p.r * 0.3f, p.y + p.r * 0.35f), radius = p.r * 0.8f,
+            center = Offset(p.x + p.r * 0.22f, p.y + p.r * 0.28f), radius = p.r * 0.58f,
         ),
-        p.r * 0.8f, Offset(p.x + p.r * 0.3f, p.y + p.r * 0.35f),
+        p.r * 0.58f, Offset(p.x + p.r * 0.22f, p.y + p.r * 0.28f),
     )
     drawCircle(Color(0x59FFFFFF), p.r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
 
