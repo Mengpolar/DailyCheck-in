@@ -366,13 +366,7 @@ fun OrbitScreen(
                         var ax = g0.cx; var ay = g0.cy
                         if (selNow != null) {
                             val fp = planetPos(g0, selNow)
-                            val far = maxOf(
-                                hypot(fp.x, fp.y),
-                                hypot(viewSize.width - fp.x, fp.y),
-                                hypot(fp.x, viewSize.height - fp.y),
-                                hypot(viewSize.width - fp.x, viewSize.height - fp.y),
-                            )
-                            val targetZoom = (far * 1.12f / fp.r).coerceIn(1f, 48f)
+                            val targetZoom = (viewSize.width / (fp.r * 2f)).coerceIn(1f, 40f)
                             camScale = 1f + (targetZoom - 1f) * zoom.value
                             ax = fp.x; ay = fp.y
                         }
@@ -395,20 +389,14 @@ fun OrbitScreen(
             val d = this.density
             val g0 = computeGeo(size.width, size.height, d)
             val z = zoom.value
-            // 相机：以选中行星中心为锚点原地放大/缩小，直至行星吞没整屏（动画即"从行星中间放大/缩小"）。
-            // 退焦时 selected 已为 null，沿用 recentSelected 作为锚点，让缩小过程随 z 平滑进行
+            // 相机：以选中行星中心为锚点原地放大/缩小（动画即"从行星中间放大/缩小"）。
+            // 目标倍率：行星直径恰好占满屏宽、不超过屏宽；退焦时沿用 recentSelected 为锚点平滑缩小
             var camScale = 1f
             var ax = g0.cx; var ay = g0.cy
             val selNow = selected ?: recentSelected
             if (selNow != null) {
                 val fp = planetPos(g0, selNow)
-                val far = maxOf(
-                    hypot(fp.x, fp.y),
-                    hypot(size.width - fp.x, fp.y),
-                    hypot(fp.x, size.height - fp.y),
-                    hypot(size.width - fp.x, size.height - fp.y),
-                )
-                val targetZoom = (far * 1.12f / fp.r).coerceIn(1f, 48f)
+                val targetZoom = (size.width / (fp.r * 2f)).coerceIn(1f, 40f)
                 camScale = 1f + (targetZoom - 1f) * z
                 ax = fp.x; ay = fp.y
             }
