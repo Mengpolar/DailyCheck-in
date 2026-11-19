@@ -3,25 +3,34 @@
 package com.mengpolar.dailycheck.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -29,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +54,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mengpolar.dailycheck.data.TaskUi
+import androidx.compose.animation.core.spring
 
 private val SheetGold = Color(0xFFD8B36A)
 private val SheetGoldInk = Color(0xFF1A1408)
@@ -65,7 +76,7 @@ fun TaskEditSheet(
         cycleDayX: Int, onceDays: Int,
     ) -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
     // 周期类型：intervalDays == 0 → 一次性（永不重复）
@@ -99,6 +110,7 @@ fun TaskEditSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
+                .fillMaxHeight()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp)
                 .verticalScroll(rememberScrollState()),
@@ -116,20 +128,11 @@ fun TaskEditSheet(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = !onceMode,
-                    onClick = { onceMode = false },
-                    label = { Text("重复") },
-                    modifier = Modifier.weight(1f),
-                )
-                FilterChip(
-                    selected = onceMode,
-                    onClick = { onceMode = true },
-                    label = { Text("永不重复") },
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            SegmentedToggle(
+                options = listOf("重复", "永不重复"),
+                selected = if (onceMode) 1 else 0,
+                onSelected = { onceMode = it == 1 },
+            )
             if (!onceMode) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
@@ -247,6 +250,56 @@ fun TaskEditSheet(
                 ),
             ) {
                 Text("保存", fontSize = 15.sp, fontFamily = FontFamily.Serif, letterSpacing = 6.sp)
+            }
+        }
+    }
+}
+
+/** 双段切换：选中高亮块滑向另一侧，带过冲回弹 */
+@Composable
+private fun SegmentedToggle(
+    options: List<String>,
+    selected: Int,
+    onSelected: (Int) -> Unit,
+) {
+    val anim = remember { Animatable(selected.toFloat()) }
+    LaunchedEffect(selected) {
+        anim.animateTo(selected.toFloat(), spring(dampingRatio = 0.7f, stiffness = 600f))
+    }
+    BoxWithConstraints(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF1A1E26))
+            .border(1.dp, Color(0x24FFFFFF), RoundedCornerShape(14.dp)),
+    ) {
+        val cell = maxWidth / options.size
+        Box(
+            Modifier
+                .offset(x = cell * anim.value)
+                .width(cell)
+                .fillMaxHeight()
+                .padding(3.dp)
+                .clip(RoundedCornerShape(11.dp))
+                .background(Color(0xFF2E5D51)),
+        )
+        Row(Modifier.fillMaxSize()) {
+            options.forEachIndexed { i, label ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onSelected(i) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        color = if (i == selected) Color(0xFFEAF2EE) else SheetDim,
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Serif,
+                    )
+                }
             }
         }
     }

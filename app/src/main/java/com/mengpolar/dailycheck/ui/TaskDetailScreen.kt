@@ -3,9 +3,10 @@
 package com.mengpolar.dailycheck.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,20 +31,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.RadioButtonUnchecked
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,21 +45,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mengpolar.dailycheck.data.CheckRecord
 import com.mengpolar.dailycheck.data.DetailUiState
-import com.mengpolar.dailycheck.data.TaskUi
 import com.mengpolar.dailycheck.data.formatDate
-import com.mengpolar.dailycheck.data.formatDateShort
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -76,156 +65,51 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.random.Random
 
-/** 任务详情（历史）内容：底部弹窗嵌入。记录卡片带堆叠滚动与左滑删除 */
+/** 历史（打卡记录）弹窗内容：只展示打卡记录，支持堆叠滚动与左滑删除 */
 @Composable
 fun TaskDetailScreen(
     state: DetailUiState,
-    onBack: () -> Unit,
-    onEdit: (TaskUi) -> Unit,
-    onDelete: (Long) -> Unit,
-    onCheck: (Long) -> CheckRecord,
     onDeleteRecord: (CheckRecord) -> Unit,
 ) {
-    var showDeleteConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 22.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                state.task.name,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = { onEdit(state.task) }) {
-                Icon(Icons.Rounded.Edit, contentDescription = "编辑")
-            }
-            IconButton(onClick = { showDeleteConfirm = true }) {
-                Icon(Icons.Rounded.Delete, contentDescription = "删除")
-            }
-            IconButton(onClick = onBack) {
-                Icon(Icons.Rounded.Close, contentDescription = "关闭")
-            }
-        }
-        val recordsHeaderIndex = if (state.task.done) 1 else 2
-        val recordsStartIndex = recordsHeaderIndex + 1
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.heightIn(max = 520.dp),
-            contentPadding = PaddingValues(20.dp, 4.dp, 20.dp, 40.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(key = "summary") {
-                Card(
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier
-                        .animateItem()
-                        .stackCard(listState, 0),
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxHeight(),
+        contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 48.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (state.records.isEmpty()) {
+            item(key = "empty") {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 80.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Column(
-                        Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (state.task.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
-                                contentDescription = null,
-                                tint = if (state.task.done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.size(22.dp),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(state.task.statusText, style = MaterialTheme.typography.titleMedium)
-                        }
-                        val last = state.lastRecordDate?.let { " · 最近 ${formatDateShort(it)}" } ?: ""
-                        Text(
-                            "${state.task.cycleLabel} · 累计完成 ${state.recordCount} 次$last",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (state.task.note.isNotBlank()) {
-                            Text(
-                                state.task.note,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-            if (!state.task.done) {
-                item(key = "check_button") {
-                    val t = state.task
-                    Button(
-                        onClick = { onCheck(t.id) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                    ) {
-                        Text("打卡")
-                    }
-                }
-            }
-            item(key = "records_header") {
-                Text(
-                    "打卡记录",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.records.isEmpty()) {
-                item(key = "records_empty") {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text(
-                            "暂无记录",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            } else {
-                itemsIndexed(state.records, key = { _, r -> "r${r.id}" }) { i, record ->
-                    SwipeDeletableRecord(
-                        record = record,
-                        onDelete = onDeleteRecord,
-                        modifier = Modifier
-                            .animateItem()
-                            .stackCard(listState, recordsStartIndex + i),
+                    Text(
+                        "暂无打卡记录",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
+        } else {
+            itemsIndexed(state.records, key = { _, r -> "r${r.id}" }) { i, record ->
+                SwipeDeletableRecord(
+                    record = record,
+                    onDelete = onDeleteRecord,
+                    modifier = Modifier
+                        .animateItem()
+                        .stackCard(listState, i),
+                )
+            }
         }
-    }
-
-    if (showDeleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("删除任务") },
-            text = { Text("将删除「${state.task.name}」及其全部打卡记录，且无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteConfirm = false
-                    onDelete(state.task.id)
-                }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
-            },
-        )
     }
 }
 
@@ -245,9 +129,22 @@ private fun Modifier.stackCard(listState: LazyListState, index: Int): Modifier =
     translationY = -7f * depth * (1f - exit)
 }
 
+/** 消散星光粒子参数（生成时固定，位置由消散进度决定） */
+private data class StarBit(
+    val x0f: Float,
+    val y0f: Float,
+    val vx: Float,
+    val vy: Float,
+    val size: Float,
+    val hue: Float,
+    val phase: Float,
+)
+
+private val DeleteRed = Color(0xFFCF6A5B)
+
 /**
- * 左滑删除：向左拖动露出右侧红色删除按钮，松手半程以上吸附展开；
- * 点击删除后卡片围绕删除钮沿弧线飞出，同时缩小、旋转、淡出
+ * 左滑删除：向左拖动露出右侧红色删除按钮（卡片右侧圆角随滑动渐变为方角，与按钮无缝衔接）；
+ * 点击删除后卡片与按钮一起化作随机星光向上飘散、逐渐消散
  */
 @Composable
 private fun SwipeDeletableRecord(
@@ -258,11 +155,15 @@ private fun SwipeDeletableRecord(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val revealWidth = with(density) { 92.dp.toPx() }
+    val corner = 12.dp
     val offset = remember(record.id) { Animatable(0f) }
-    val fly = remember(record.id) { Animatable(0f) }
+    val dissolve = remember(record.id) { Animatable(0f) }
     var dragJob by remember { mutableStateOf<Job?>(null) }
-    var cardWidth by remember { mutableStateOf(0) }
-    val deleting = fly.value > 0f
+    var bits by remember(record.id) { mutableStateOf<List<StarBit>?>(null) }
+
+    val revealP = ((-offset.value) / revealWidth).coerceIn(0f, 1f)
+    val fading = dissolve.value > 0f
+    val cardAlpha = if (fading) 1f - min(dissolve.value * 4f, 1f) else 1f
 
     fun settle() {
         dragJob?.cancel()
@@ -277,59 +178,89 @@ private fun SwipeDeletableRecord(
             .fillMaxWidth()
             .height(IntrinsicSize.Min),
     ) {
-        // 底层：删除按钮（左滑露出）
+        // 消散星光层：粒子从卡片区域向上飘散（可越出卡片边界）
+        Canvas(Modifier.matchParentSize()) {
+            val t = dissolve.value
+            val list = bits ?: return@Canvas
+            if (t <= 0f) return@Canvas
+            list.forEach { b ->
+                val px = b.x0f * size.width + b.vx * t * size.width * 0.35f
+                val py = b.y0f * size.height - b.vy * t * size.height * 1.4f + 30f * t * t
+                val tw = 0.7f + 0.3f * sin(t * 22f + b.phase)
+                val alpha = ((1f - t) * (1f - t) * tw).coerceIn(0f, 1f)
+                if (alpha <= 0.01f) return@forEach
+                val r = b.size * (1f - 0.4f * t)
+                val c = Color.hsl(b.hue, 0.72f, 0.78f, 1f)
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(c.copy(alpha = 0.5f * alpha), Color.Black.copy(alpha = 0f)),
+                        center = Offset(px, py),
+                        radius = r * 2.6f,
+                    ),
+                    r * 2.6f,
+                    Offset(px, py),
+                )
+                drawCircle(Color.White.copy(alpha = alpha * 0.9f), r * 0.35f, Offset(px, py))
+            }
+        }
+        // 底层：删除按钮（左滑露出；左方角、右侧与卡片同圆角）
         Box(
             Modifier
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(with(density) { 92.dp })
                 .padding(vertical = 4.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFFCF6A5B))
-                .clickable(enabled = !deleting && offset.value < -revealWidth * 0.35f) {
-                    if (fly.isRunning) return@clickable
+                .graphicsLayer { alpha = cardAlpha }
+                .clip(
+                    RoundedCornerShape(
+                        topStart = 0.dp,
+                        topEnd = corner,
+                        bottomEnd = corner,
+                        bottomStart = 0.dp,
+                    ),
+                )
+                .background(DeleteRed)
+                .clickable(enabled = !fading && offset.value < -revealWidth * 0.35f) {
+                    if (dissolve.isRunning) return@clickable
+                    bits = List(18) {
+                        StarBit(
+                            x0f = 0.08f + Random.nextFloat() * 0.84f,
+                            y0f = 0.15f + Random.nextFloat() * 0.7f,
+                            vx = -0.3f + Random.nextFloat() * 0.6f,
+                            vy = 0.6f + Random.nextFloat() * 0.9f,
+                            size = 2.5f + Random.nextFloat() * 3.5f,
+                            hue = Random.nextInt(360).toFloat(),
+                            phase = Random.nextFloat() * (PI.toFloat() * 2f),
+                        )
+                    }
                     scope.launch {
-                        fly.animateTo(1f, tween(430, easing = FastOutSlowInEasing))
+                        dissolve.animateTo(1f, tween(1400, easing = LinearEasing))
                         onDelete(record)
                     }
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Rounded.Delete,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("删除", color = Color.White, fontSize = 13.sp)
-            }
+            Text("删除", color = Color.White, fontSize = 13.sp)
         }
-        // 前景：记录卡片（左滑 / 弧线飞出）
+        // 前景：记录卡片（左滑；右侧圆角随滑动渐变为方角，与删除按钮无缝衔接）
         RecordRow(
             record,
+            shape = RoundedCornerShape(
+                topStart = corner,
+                topEnd = corner * (1f - revealP),
+                bottomEnd = corner * (1f - revealP),
+                bottomStart = corner,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .onSizeChanged { cardWidth = it.width }
                 .offset { IntOffset(offset.value.roundToInt(), 0) }
-                .graphicsLayer {
-                    val p = fly.value
-                    if (p > 0f) {
-                        val w = cardWidth.coerceAtLeast(1).toFloat()
-                        translationX = w * (0.55f + 0.85f * p)
-                        translationY = -w * 0.22f * sin(PI.toFloat() * p)
-                        rotationZ = -16f * p
-                        scaleX = 1f - 0.55f * p
-                        scaleY = 1f - 0.55f * p
-                        alpha = 1f - p
-                    }
-                }
+                .graphicsLayer { alpha = cardAlpha }
                 .pointerInput(record.id) {
                     detectHorizontalDragGestures(
                         onDragEnd = { settle() },
                         onDragCancel = { settle() },
                     ) { change, dragAmount ->
+                        if (dissolve.isRunning) return@detectHorizontalDragGestures
                         change.consume()
                         val next = (offset.value + dragAmount).coerceIn(-revealWidth, 0f)
                         dragJob?.cancel()
@@ -340,13 +271,15 @@ private fun SwipeDeletableRecord(
     }
 }
 
-private val AndroidDeleteRed = Color(0xFFCF6A5B)
-
 @Composable
-private fun RecordRow(record: CheckRecord, modifier: Modifier = Modifier) {
+private fun RecordRow(
+    record: CheckRecord,
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(12.dp),
+) {
     val date = LocalDate.ofEpochDay(record.epochDay)
     val time = LocalDateTime.ofInstant(Instant.ofEpochMilli(record.createdAtEpochMs), ZoneId.systemDefault())
-    Card(shape = MaterialTheme.shapes.medium, modifier = modifier) {
+    Card(shape = shape, modifier = modifier) {
         Row(
             Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -358,7 +291,7 @@ private fun RecordRow(record: CheckRecord, modifier: Modifier = Modifier) {
                 modifier = Modifier.size(18.dp),
             )
             Spacer(Modifier.width(12.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(formatDate(date), style = MaterialTheme.typography.bodyMedium)
                 Text(
                     "打卡时间 %02d:%02d".format(time.hour, time.minute),

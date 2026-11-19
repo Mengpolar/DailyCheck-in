@@ -91,10 +91,11 @@ private fun App() {
         onOpenRecords = { taskVm.openDetail(it) },
         onCheck = checkIn,
         onEdit = { id -> openEdit(id) },
+        onDeleteTask = { taskVm.deleteTask(it) },
     )
 
     if (showSettings) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         ModalBottomSheet(onDismissRequest = { showSettings = false }, sheetState = sheetState) {
             SettingsScreen(
                 vm = updateVm,
@@ -104,14 +105,10 @@ private fun App() {
     }
 
     detailState?.let { ds ->
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         ModalBottomSheet(onDismissRequest = { taskVm.openDetail(null) }, sheetState = sheetState) {
             TaskDetailScreen(
                 state = ds,
-                onBack = { taskVm.openDetail(null) },
-                onEdit = { openEdit(it.id) },
-                onDelete = { taskVm.deleteTask(it) },
-                onCheck = checkIn,
                 onDeleteRecord = { taskVm.deleteRecord(it.id) },
             )
         }

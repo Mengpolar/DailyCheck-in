@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
@@ -71,6 +73,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
@@ -225,6 +228,7 @@ fun OrbitScreen(
     onOpenRecords: (Long) -> Unit,
     onCheck: (Long) -> CheckRecord,
     onEdit: (Long) -> Unit,
+    onDeleteTask: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     val screenDensity = LocalDensity.current.density
@@ -437,12 +441,17 @@ fun OrbitScreen(
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
     // 长按打卡：按住填充（每秒 +1），松手渐退（每秒 -1），满 3 秒完成打卡并点亮行星
+    // 长按删除：聚焦信息卡右侧删除钮，同填充动画但为红色，满 3 秒删除任务（无撤销）
     var holdDown by remember { mutableStateOf(false) }
     val holdProgress = remember { mutableFloatStateOf(0f) }
+    var delDown by remember { mutableStateOf(false) }
+    val delProgress = remember { mutableFloatStateOf(0f) }
     val haptic = LocalHapticFeedback.current
     LaunchedEffect(selectedId) {
         holdDown = false
         holdProgress.floatValue = 0f
+        delDown = false
+        delProgress.floatValue = 0f
         if (selectedId == null) return@LaunchedEffect
         val task = state.items.firstOrNull { it.id == selectedId } ?: return@LaunchedEffect
         var last = withFrameNanos { it }
@@ -451,15 +460,22 @@ fun OrbitScreen(
             val now = withFrameNanos { it }
             val dt = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.1f)
             last = now
-            val next = if (holdDown) holdProgress.floatValue + dt else holdProgress.floatValue - dt
-            val v = next.coerceIn(0f, CHECK_HOLD_S)
-            holdProgress.floatValue = v
-            if (++logTick % 30 == 0) Log.d("OrbitCanvas", "hold loop p=$v down=$holdDown")
-            if (holdDown && v >= CHECK_HOLD_S) {
+            val hn = if (holdDown) holdProgress.floatValue + dt else holdProgress.floatValue - dt
+            holdProgress.floatValue = hn.coerceIn(0f, CHECK_HOLD_S)
+            val dn = if (delDown) delProgress.floatValue + dt else delProgress.floatValue - dt
+            delProgress.floatValue = dn.coerceIn(0f, CHECK_HOLD_S)
+            if (++logTick % 30 == 0) Log.d("OrbitCanvas", "hold p=${holdProgress.floatValue} down=$holdDown d=${delProgress.floatValue} deldown=$delDown")
+            if (holdDown && holdProgress.floatValue >= CHECK_HOLD_S) {
                 holdDown = false
                 holdProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onCheck(task.id)
+            }
+            if (delDown && delProgress.floatValue >= CHECK_HOLD_S) {
+                delDown = false
+                delProgress.floatValue = 0f
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onDeleteTask(task.id)
             }
         }
     }
@@ -696,28 +712,70 @@ fun OrbitScreen(
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color(0xC010141A))
                     .border(1.dp, Color(0x24FFFFFF), RoundedCornerShape(24.dp))
-                    .pointerInput(Unit) { detectTapGestures { } }   // 消费卡内点击，避免透传退焦
+                    // 仅占位命中路径挡住透传（空 handler 不消费事件，子删除钮才能收到长按）
+                    .pointerInput(Unit) { }
                     .padding(horizontal = 22.dp, vertical = 16.dp),
             ) {
-                Column {
-                    Text(
-                        t.name,
-                        color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
-                        letterSpacing = 2.sp, maxLines = 1,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
-                        color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
-                        color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp,
-                    )
-                    if (t.note.isNotBlank()) {
+                Row {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            t.name,
+                            color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
+                            letterSpacing = 2.sp, maxLines = 1,
+                        )
                         Spacer(Modifier.height(4.dp))
-                        Text(t.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                        Text(
+                            "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
+                            color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
+                            color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp,
+                        )
+                        if (t.note.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(t.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                        }
+                    }
+                    // 长按 3 秒删除任务：红色填充（同打卡按钮），完成后轨道行星消散，无撤销
+                    val delFill = (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterVertically)
+                            .padding(start = 10.dp)
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x26FFFFFF))
+                            .border(1.dp, Color(0x30FFFFFF), CircleShape)
+                            .pointerInput(t.id) {
+                                detectTapGestures(
+                                    onPress = {
+                                        delDown = true
+                                        try { awaitRelease() } finally { delDown = false }
+                                    },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Canvas(Modifier.fillMaxSize()) {
+                            if (delFill > 0f) {
+                                val circle = Path().apply { addOval(Rect(0f, 0f, size.width, size.height)) }
+                                clipPath(circle) {
+                                    drawRect(
+                                        Color(0xFFCF6A5B),
+                                        topLeft = Offset.Zero,
+                                        size = Size(size.width * delFill, size.height),
+                                    )
+                                }
+                            }
+                        }
+                        Icon(
+                            Icons.Rounded.Delete,
+                            contentDescription = "长按删除任务",
+                            tint = lerp(InkColor, Color.White, delFill),
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }
