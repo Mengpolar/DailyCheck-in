@@ -143,11 +143,11 @@ private fun computeGeo(wPx: Float, hPx: Float, d: Float): Geo {
     return Geo(wPx, hPx, wPx / 2f, hPx / 2f, q, radii, s)
 }
 
-/** 相机变换：以锚点为不动点缩放几何——聚焦时锚点即选中行星中心，行星原地放大/缩小，无横移 */
-private fun transformGeo(g: Geo, camScale: Float, ax: Float, ay: Float): Geo = Geo(
+/** 相机变换：K 为镜头中心（显示在屏幕中央的世界点），camScale 为倍率；camScale=1 且 K=几何中心时为恒等 */
+private fun transformGeo(g: Geo, camScale: Float, kx: Float, ky: Float): Geo = Geo(
     w = g.w, h = g.h,
-    cx = ax + (g.cx - ax) * camScale,
-    cy = ay + (g.cy - ay) * camScale,
+    cx = g.cx + (g.cx - kx) * camScale,
+    cy = g.cy + (g.cy - ky) * camScale,
     q = g.q,
     radiiPx = g.radiiPx.map { it * camScale },
     s = g.s,
@@ -359,18 +359,23 @@ fun OrbitScreen(
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
                         val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
-                        // 相机状态与绘制一致（以选中行星中心为锚点缩放）。
-                        // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证聚焦态命中测试与绘制一致
-                        val selNow = state.items.firstOrNull { it.id == selectedId }
+                        // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
+                        // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
+                        val selNow = state.items.firstOrNull { it.id == selectedId } ?: recentSelected
                         var camScale = 1f
-                        var ax = g0.cx; var ay = g0.cy
+                        var kx = g0.cx; var ky = g0.cy
                         if (selNow != null) {
                             val fp = planetPos(g0, selNow)
                             val targetZoom = (viewSize.width / (fp.r * 2f)).coerceIn(1f, 40f)
                             camScale = 1f + (targetZoom - 1f) * zoom.value
-                            ax = fp.x; ay = fp.y
+                            val dp = ((zoom.value - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                            val d = dp * dp * (3f - 2f * dp)
+                            val px = fp.x + (g0.cx - fp.x) * d
+                            val py = fp.y + (g0.cy - fp.y) * d
+                            kx = fp.x - (px - g0.cx) / camScale
+                            ky = fp.y - (py - g0.cy) / camScale
                         }
-                        val g = transformGeo(g0, camScale, ax, ay)
+                        val g = transformGeo(g0, camScale, kx, ky)
                         val tx = tap.x; val ty = tap.y
                         var best: OrbitTask? = null
                         var bd = 1e9f
@@ -389,18 +394,25 @@ fun OrbitScreen(
             val d = this.density
             val g0 = computeGeo(size.width, size.height, d)
             val z = zoom.value
-            // 相机：以选中行星中心为锚点原地放大/缩小（动画即"从行星中间放大/缩小"）。
-            // 目标倍率：行星直径恰好占满屏宽、不超过屏宽；退焦时沿用 recentSelected 为锚点平滑缩小
+            // 相机：行星先原地放大（前 40% 行程），随后在放大过程中缓缓滑向屏幕中心；
+            // 落定时行星居中且直径≈屏宽。退焦沿同一曲线反向（先滑回轨道位置、再原地缩小）。
+            // recentSelected 保证退焦动画期间镜头目标不丢
             var camScale = 1f
-            var ax = g0.cx; var ay = g0.cy
+            var kx = g0.cx; var ky = g0.cy
             val selNow = selected ?: recentSelected
             if (selNow != null) {
                 val fp = planetPos(g0, selNow)
                 val targetZoom = (size.width / (fp.r * 2f)).coerceIn(1f, 40f)
                 camScale = 1f + (targetZoom - 1f) * z
-                ax = fp.x; ay = fp.y
+                val dp = ((z - 0.4f) / 0.6f).coerceIn(0f, 1f)
+                val d = dp * dp * (3f - 2f * dp)   // smoothstep：位移集中在中后段
+                val px = fp.x + (g0.cx - fp.x) * d
+                val py = fp.y + (g0.cy - fp.y) * d
+                // 由"行星屏幕位置 = 屏心 + (fp - K) × camScale"反解镜头中心 K
+                kx = fp.x - (px - g0.cx) / camScale
+                ky = fp.y - (py - g0.cy) / camScale
             }
-            val g = transformGeo(g0, camScale, ax, ay)
+            val g = transformGeo(g0, camScale, kx, ky)
 
             try {
                 // 背景图：原始像素坐标绘制（不经 scale 变换，规避 dst 单位歧义），cover 铺满 + 视差
@@ -411,8 +423,8 @@ fun OrbitScreen(
                     val cover = maxOf(size.width / bw, size.height / bh) * 1.16f * bgScale
                     val dw = bw * cover; val dh = bh * cover
                     val marginX = (dw - size.width) / 2f; val marginY = (dh - size.height) / 2f
-                    val camShiftX = (size.width / 2f - ax) * 0.08f * z
-                    val camShiftY = (size.height / 2f - ay) * 0.08f * z
+                    val camShiftX = (size.width / 2f - kx) * 0.08f * z
+                    val camShiftY = (size.height / 2f - ky) * 0.08f * z
                     val left = (size.width - dw) / 2f - parallax.x * d + camShiftX.coerceIn(-marginX, marginX)
                     val top = (size.height - dh) / 2f - parallax.y * d + camShiftY.coerceIn(-marginY, marginY)
                     drawImage(
@@ -434,7 +446,7 @@ fun OrbitScreen(
                         radius = maxOf(size.width, size.height) * 0.72f,
                     )
                 )
-                val starShift = Offset((g0.cx - ax) * 0.25f * z, (g0.cy - ay) * 0.25f * z)
+                val starShift = Offset((g0.cx - kx) * 0.25f * z, (g0.cy - ky) * 0.25f * z)
                 drawStars(g0, stars, timeMs, Offset(parallax.x * 1.3f + starShift.x, parallax.y * 1.3f + starShift.y), (1f - 0.55f * z).coerceIn(0.15f, 1f), sparkStar)
 
                 // 星系层：聚焦缩放通过轨道半径放大实现（无变换层，规避设备差异）
