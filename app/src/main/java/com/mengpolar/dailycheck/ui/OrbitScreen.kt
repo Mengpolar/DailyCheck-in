@@ -43,10 +43,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -210,7 +206,6 @@ fun OrbitScreen(
     onOpenSettings: () -> Unit,
     onOpenRecords: (Long) -> Unit,
     onCheck: (Long) -> CheckRecord,
-    onUndo: (Long) -> Unit,
     onEdit: (Long) -> Unit,
 ) {
     val context = LocalContext.current
@@ -220,8 +215,6 @@ fun OrbitScreen(
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
     if (selected != null) recentSelected = selected
-    val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
 
     // 帧时钟：驱动星空闪烁 / 琥珀脉冲 / 行星实时位置
@@ -344,18 +337,6 @@ fun OrbitScreen(
 
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
-    val doCheck: (OrbitTask) -> Unit = { t ->
-        val record = onCheck(t.id)
-        scope.launch {
-            val result = snackbar.showSnackbar(
-                message = "已打卡「${t.name}」",
-                actionLabel = "撤销",
-                withDismissAction = false,
-            )
-            if (result == SnackbarResult.ActionPerformed) onUndo(record.id)
-        }
-    }
-
     // 长按打卡：按住填充（每秒 +1），松手渐退（每秒 -1），满 3 秒完成打卡并点亮行星
     var holdDown by remember { mutableStateOf(false) }
     val holdProgress = remember { mutableFloatStateOf(0f) }
@@ -379,7 +360,7 @@ fun OrbitScreen(
                 holdDown = false
                 holdProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                doCheck(task)
+                onCheck(task.id)
             }
         }
     }
@@ -663,13 +644,6 @@ fun OrbitScreen(
             timeMs = timeMs,
             dim = zoom.value,
             modifier = Modifier.align(Alignment.BottomCenter),
-        )
-
-        SnackbarHost(
-            snackbar,
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 150.dp),
         )
     }
 }

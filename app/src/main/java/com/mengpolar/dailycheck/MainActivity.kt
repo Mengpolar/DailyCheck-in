@@ -100,7 +100,6 @@ private fun App() {
             onOpenSettings = { showSettings = true },
             onOpenRecords = { taskVm.openDetail(it) },
             onCheck = checkIn,
-            onUndo = { taskVm.undoCheck(it) },
             onEdit = { id -> openEdit(id) },
         )
     }
