@@ -581,15 +581,20 @@ private fun ArcNavBar(
     }
 }
 
-/** 月图处理：实心灰白底圆 + 月图叠加（补满原图半透明），输出圆形月盘 */
+/** 月图处理：moon2 为居中正方形透图——圆内（半径 = 边长/2）强制不透明，圆外透明 */
 private fun processMoon(src: Bitmap): Bitmap {
-    val side = minOf(src.width, src.height)
-    val out = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-    val c = android.graphics.Canvas(out)
-    val p1 = Paint().apply { isAntiAlias = true; color = 0xFFB4B4B0.toInt() }
-    c.drawCircle(side / 2f, side / 2f, side / 2f - 1f, p1)
-    val p2 = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
-    c.drawBitmap(src, null, RectF(0f, 0f, side.toFloat(), side.toFloat()), p2)
+    val w = src.width; val h = src.height
+    val px = IntArray(w * h)
+    src.getPixels(px, 0, w, 0, 0, w, h)
+    val cx = w / 2f; val cy = h / 2f
+    val r = w / 2f
+    for (i in px.indices) {
+        val x = (i % w).toFloat(); val y = (i / w).toFloat()
+        val inside = (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r
+        px[i] = if (inside) px[i] or (0xFF shl 24) else px[i] and 0x00FFFFFF
+    }
+    val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    out.setPixels(px, 0, w, 0, 0, w, h)
     return out
 }
 
@@ -941,13 +946,6 @@ private fun DrawScope.drawTask(
             center = Offset(p.x, p.y), radius = p.r,
         ),
         p.r, Offset(p.x, p.y),
-    )
-    drawCircle(
-        Brush.radialGradient(
-            listOf(Color(0x4DFFFFFF), Color(0x00FFFFFF)),
-            center = Offset(p.x - p.r * 0.28f, p.y - p.r * 0.33f), radius = p.r * 0.52f,
-        ),
-        p.r * 0.52f, Offset(p.x - p.r * 0.28f, p.y - p.r * 0.33f),
     )
     drawCircle(
         Brush.radialGradient(
