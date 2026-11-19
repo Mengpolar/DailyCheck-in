@@ -112,6 +112,7 @@ private fun App() {
                 onEdit = { openEdit(it.id) },
                 onDelete = { taskVm.deleteTask(it) },
                 onCheck = checkIn,
+                onDeleteRecord = { taskVm.deleteRecord(it.id) },
             )
         }
     }

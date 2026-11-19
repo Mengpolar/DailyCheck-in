@@ -15,6 +15,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
@@ -93,6 +94,7 @@ import com.mengpolar.dailycheck.data.OrbitTask
 import com.mengpolar.dailycheck.data.OrbitUiState
 import com.mengpolar.dailycheck.data.PlanetState
 import com.mengpolar.dailycheck.data.weekdayLabel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.abs
@@ -346,8 +348,15 @@ fun OrbitScreen(
         }.getOrNull()
     }
 
-    // 轨道盘倾角：q = 0.16（近侧视）~ 1（正俯视），空白区上下滑动调节
-    var tiltQ by remember { mutableFloatStateOf(0.62f) }
+    // 轨道盘倾角：0.20（侧视）/ 0.62（斜视）/ 1.0（俯视）三档；
+    // 空白区上下滑动自由调节，松手按速度惯性滑行后弹簧吸附到最近档位
+    val tiltAnim = remember { Animatable(0.62f) }
+    val tiltDetents = remember { floatArrayOf(0.20f, 0.62f, 1f) }
+    val tiltScope = rememberCoroutineScope()
+    var tiltDragJob by remember { mutableStateOf<Job?>(null) }
+    var tiltVelocity by remember { mutableFloatStateOf(0f) }
+    var tiltLastUptime by remember { mutableStateOf(0L) }
+    var tiltLastQ by remember { mutableFloatStateOf(0.62f) }
 
     // 轨道布局过渡：任务增删 / 盘面缩放时，轨道半径旧→新平滑插值
     val targetRadii = remember(viewSize, state.items.size) {
@@ -421,8 +430,8 @@ fun OrbitScreen(
     }
 
     // 诊断几何（与 Canvas 内一致）
-    val diagGeo = remember(viewSize, state.items.size, tiltQ) {
-        computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltQ)
+    val diagGeo = remember(viewSize, state.items.size) {
+        computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltAnim.value)
     }
 
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
@@ -465,11 +474,41 @@ fun OrbitScreen(
             Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    // 空白区上下滑动：调整轨道盘倾角（中心固定，绕 X 轴倾斜）
+                    // 空白区上下滑动：轨道盘绕 X 轴倾角（中心固定）；松手惯性滑行后吸附档位
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            tiltQ = (tiltQ - dragAmount / 550f).coerceIn(0.16f, 1f)
+                            val target = (tiltAnim.value - dragAmount / 550f).coerceIn(0.16f, 1f)
+                            val nowMs = System.nanoTime() / 1_000_000L
+                            val dt = (nowMs - tiltLastUptime).coerceAtLeast(1L)
+                            val instant = -(target - tiltLastQ) / (dt / 1000f)
+                            tiltVelocity = tiltVelocity * 0.55f + instant * 0.45f
+                            tiltLastUptime = nowMs
+                            tiltLastQ = target
+                            tiltDragJob?.cancel()
+                            tiltDragJob = tiltScope.launch { tiltAnim.snapTo(target) }
+                        },
+                        onDragEnd = {
+                            // 速度惯性滑行 0.12s 的投影位置 → 最近档位，弹簧带初速吸附
+                            val projected = (tiltAnim.value + tiltVelocity * 0.12f).coerceIn(0.16f, 1f)
+                            val detent = tiltDetents.minByOrNull { abs(it - projected) } ?: tiltAnim.value
+                            tiltDragJob?.cancel()
+                            tiltDragJob = tiltScope.launch {
+                                tiltAnim.animateTo(
+                                    detent,
+                                    spring(dampingRatio = 0.85f, stiffness = 280f),
+                                    initialVelocity = tiltVelocity,
+                                )
+                            }
+                            tiltVelocity = 0f
+                        },
+                        onDragCancel = {
+                            val detent = tiltDetents.minByOrNull { abs(it - tiltAnim.value) } ?: tiltAnim.value
+                            tiltDragJob?.cancel()
+                            tiltDragJob = tiltScope.launch {
+                                tiltAnim.animateTo(detent, spring(dampingRatio = 0.9f, stiffness = 300f))
+                            }
+                            tiltVelocity = 0f
                         },
                     )
                 }
@@ -477,7 +516,7 @@ fun OrbitScreen(
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
-                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltQ)
+                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltAnim.value)
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
                         val selNow = state.items.firstOrNull { it.id == selectedId } ?: recentSelected
@@ -511,7 +550,7 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g0raw = computeGeo(size.width, size.height, d, state.items.size, tiltQ)
+            val g0raw = computeGeo(size.width, size.height, d, state.items.size, tiltAnim.value)
             // 布局过渡中：以插值半径重排几何（新增轨道滑出 / 移除补位）
             val g0 = if (orbitAnim.value < 1f && animFrom != null && animTo != null) {
                 Geo(

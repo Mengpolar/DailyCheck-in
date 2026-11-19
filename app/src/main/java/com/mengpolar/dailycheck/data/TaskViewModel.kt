@@ -274,4 +274,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         repo.undoCheck(recordId)
         refresh()
     }
+
+    /** 删除一条打卡记录（同撤销逻辑：移除记录并回退任务最近打卡日） */
+    fun deleteRecord(recordId: Long) {
+        repo.undoCheck(recordId)
+        refresh()
+    }
 }
