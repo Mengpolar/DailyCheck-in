@@ -546,25 +546,34 @@ private fun ArcNavBar(
         Row(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = (12.dp + 60.dp * progress))
+                .padding(bottom = (6.dp + 18.dp * progress))
                 .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
-            horizontalArrangement = Arrangement.spacedBy(64.dp),
+            horizontalArrangement = Arrangement.spacedBy(44.dp),
         ) {
-            IconButton(onClick = onAdd, enabled = clickable) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_star_add),
-                    contentDescription = "添加任务",
-                    tint = GoldColor,
-                    modifier = Modifier.size(30.dp),
-                )
-            }
-            IconButton(onClick = onOpenSettings, enabled = clickable) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_setting_btn),
-                    contentDescription = "设置",
-                    tint = Color(0xFFB9C2D4),
-                    modifier = Modifier.size(26.dp),
-                )
+            listOf(
+                R.drawable.ic_star_add to onAdd,
+                R.drawable.ic_setting_btn to onOpenSettings,
+            ).forEach { (iconRes, onClick) ->
+                Box(contentAlignment = Alignment.Center) {
+                    // 轻微黑色光晕：黑图标在亮月面上的衬底
+                    Box(
+                        Modifier
+                            .size(68.dp)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(Color(0x59000000), Color(0x00000000))
+                                )
+                            )
+                    )
+                    IconButton(onClick = onClick, enabled = clickable) {
+                        Icon(
+                            painter = painterResource(iconRes),
+                            contentDescription = null,
+                            tint = Color.Black,
+                            modifier = Modifier.size(40.dp),
+                        )
+                    }
+                }
             }
         }
     }
