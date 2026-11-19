@@ -588,10 +588,17 @@ private fun processMoon(src: Bitmap): Bitmap {
     src.getPixels(px, 0, w, 0, 0, w, h)
     val cx = w / 2f; val cy = h / 2f
     val r = w / 2f
+    // 圆内：alpha 提升到 ~78%（月面可见但保留一定透明度，星空微透）；圆外：透明
+    val moonAlpha = 204
     for (i in px.indices) {
         val x = (i % w).toFloat(); val y = (i / w).toFloat()
         val inside = (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r
-        px[i] = if (inside) px[i] or (0xFF shl 24) else px[i] and 0x00FFFFFF
+        if (inside) {
+            val a = maxOf(px[i] ushr 24, moonAlpha)
+            px[i] = (a shl 24) or (px[i] and 0x00FFFFFF)
+        } else {
+            px[i] = px[i] and 0x00FFFFFF
+        }
     }
     val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
     out.setPixels(px, 0, w, 0, 0, w, h)
