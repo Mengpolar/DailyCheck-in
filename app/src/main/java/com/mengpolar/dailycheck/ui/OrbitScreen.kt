@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +67,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -116,6 +118,8 @@ private val RING_DEFS = floatArrayOf(150f, 208f, 264f)
 private class Geo(
     val w: Float, val h: Float, val cx: Float, val cy: Float,
     val q: Float, val radiiPx: List<Float>, val s: Float,
+    /** 相机缩放（1 = 全景），聚焦时 = 目标倍率 × 聚焦进度 */
+    val zoom: Float = 1f,
 ) {
     /** dp 常数转 px */
     fun dp(v: Float) = v * s
@@ -139,17 +143,28 @@ private fun computeGeo(wPx: Float, hPx: Float, d: Float): Geo {
     return Geo(wPx, hPx, wPx / 2f, hPx / 2f, q, radii, s)
 }
 
+/** 相机变换：把全景几何映射到当前镜头（聚焦选中行星）下的屏幕几何 */
+private fun transformGeo(g: Geo, camScale: Float, camCx: Float, camCy: Float): Geo = Geo(
+    w = g.w, h = g.h,
+    cx = (g.cx - camCx) * camScale + g.cx,
+    cy = (g.cy - camCy) * camScale + g.cy,
+    q = g.q,
+    radiiPx = g.radiiPx.map { it * camScale },
+    s = g.s,
+    zoom = camScale,
+)
+
 private fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 
 private class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
-private fun planetPos(g: Geo, t: OrbitTask, zf: Float = 1f): PlanetPos {
+private fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
     val a = planetAngle(t.frac) + t.jitterDeg * Math.PI.toFloat() / 180f
-    val R = g.radiiPx[t.ring] * zf
+    val R = g.radiiPx[t.ring]
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
-    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * g.s * (0.85f + 0.35f * nearness)
+    val pr = (if (t.ring == 0) 18f else if (t.ring == 1) 20f else 22f) * g.s * g.zoom * (0.85f + 0.35f * nearness)
     return PlanetPos(x, y, nearness, pr)
 }
 
@@ -185,6 +200,7 @@ fun OrbitScreen(
     onOpenRecords: (Long) -> Unit,
     onCheck: (Long) -> CheckRecord,
     onUndo: (Long) -> Unit,
+    onEdit: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     val screenDensity = LocalDensity.current.density
@@ -234,7 +250,7 @@ fun OrbitScreen(
     val imageKey = state.items.joinToString("|") { it.imagePath ?: "-" }
     val planetImages = remember(imageKey) {
         val ctx = context.applicationContext
-        buildMap<Long, Bitmap> {
+        buildMap<Long, ImageBitmap> {
             state.items.forEach { t ->
                 val path = t.imagePath ?: return@forEach
                 val f = File(ctx.filesDir, path)
@@ -243,11 +259,11 @@ fun OrbitScreen(
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFile(f.absolutePath, bounds)
                     var sample = 1
-                    while (bounds.outWidth / (sample * 2) >= 256) sample *= 2
+                    while (bounds.outWidth / (sample * 2) >= 512) sample *= 2
                     BitmapFactory.decodeFile(
                         f.absolutePath,
                         BitmapFactory.Options().apply { inSampleSize = sample },
-                    )?.let { put(t.id, circleCrop(it)) }
+                    )?.let { put(t.id, circleCrop(it).asImageBitmap()) }
                 }
             }
         }
@@ -335,10 +351,22 @@ fun OrbitScreen(
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
-                        val g = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+                        // 相机状态与绘制一致（聚焦选中行星）
+                        var camScale = 1f
+                        var camCx = g0.cx; var camCy = g0.cy
+                        val selNow = selected
+                        if (selNow != null) {
+                            val fp = planetPos(g0, selNow)
+                            val targetZoom = (viewSize.width / (fp.r * 2f)).coerceIn(1f, 16f)
+                            camScale = 1f + (targetZoom - 1f) * zoom.value
+                            camCx = g0.cx + (fp.x - g0.cx) * zoom.value
+                            camCy = g0.cy + (fp.y - g0.cy) * zoom.value
+                        }
+                        val g = transformGeo(g0, camScale, camCx, camCy)
                         val tx = tap.x; val ty = tap.y
                         // 弧形导航区域内的 tap 交给弧自身处理，不生成星光
-                        if (tap.y < size.height - 62f * screenDensity) addSpark(tap.x, tap.y)
+                        if (tap.y < size.height - 100f * screenDensity) addSpark(tap.x, tap.y)
                         var best: OrbitTask? = null
                         var bd = 1e9f
                         state.items.forEach { t ->
@@ -351,20 +379,34 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g = computeGeo(size.width, size.height, d)
+            val g0 = computeGeo(size.width, size.height, d)
             val z = zoom.value
-            val zf = 1f + 0.05f * z
+            // 相机：聚焦选中行星——镜头中心滑向行星、缩放至行星直径 ≈ 屏宽
+            var camScale = 1f
+            var camCx = g0.cx; var camCy = g0.cy
+            val selNow = selected
+            if (selNow != null) {
+                val fp = planetPos(g0, selNow)
+                val targetZoom = (size.width / (fp.r * 2f)).coerceIn(1f, 16f)
+                camScale = 1f + (targetZoom - 1f) * z
+                camCx = g0.cx + (fp.x - g0.cx) * z
+                camCy = g0.cy + (fp.y - g0.cy) * z
+            }
+            val g = transformGeo(g0, camScale, camCx, camCy)
 
             try {
                 // 背景图：原始像素坐标绘制（不经 scale 变换，规避 dst 单位歧义），cover 铺满 + 视差
                 val bg = bgImage
                 if (bg != null) {
                     val bw = bg.width.toFloat(); val bh = bg.height.toFloat()
-                    val cover = maxOf(size.width / bw, size.height / bh) * 1.16f
+                    val bgScale = 1f + (camScale - 1f) * 0.12f
+                    val cover = maxOf(size.width / bw, size.height / bh) * 1.16f * bgScale
                     val dw = bw * cover; val dh = bh * cover
                     val marginX = (dw - size.width) / 2f; val marginY = (dh - size.height) / 2f
-                    val left = (size.width - dw) / 2f - parallax.x * d
-                    val top = (size.height - dh) / 2f - parallax.y * d
+                    val camShiftX = (size.width / 2f - camCx) * 0.1f
+                    val camShiftY = (size.height / 2f - camCy) * 0.1f
+                    val left = (size.width - dw) / 2f - parallax.x * d + camShiftX.coerceIn(-marginX, marginX)
+                    val top = (size.height - dh) / 2f - parallax.y * d + camShiftY.coerceIn(-marginY, marginY)
                     drawImage(
                         bg,
                         srcOffset = IntOffset.Zero,
@@ -384,13 +426,14 @@ fun OrbitScreen(
                         radius = maxOf(size.width, size.height) * 0.72f,
                     )
                 )
-                drawStars(g, stars, timeMs, Offset(parallax.x * 1.3f, parallax.y * 1.3f), 1f - 0.3f * z, sparkStar)
+                val starShift = Offset((g0.cx - camCx) * 0.25f, (g0.cy - camCy) * 0.25f)
+                drawStars(g0, stars, timeMs, Offset(parallax.x * 1.3f + starShift.x, parallax.y * 1.3f + starShift.y), 1f - 0.3f * z, sparkStar)
 
                 // 星系层：聚焦缩放通过轨道半径放大实现（无变换层，规避设备差异）
-                drawOrbitLayer(g, zf)
-                drawAnchorTicks(g, state.items, zf)
-                state.items.sortedBy { planetPos(g, it, zf).nearness }.forEach { t ->
-                    drawTask(g, t, timeMs, z, zf, selected, planetImages, dimmed = selected != null && selected.id != t.id)
+                drawOrbitLayer(g)
+                drawAnchorTicks(g, state.items, z)
+                state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
+                    drawTask(g, t, timeMs, z, selected, planetImages, dimmed = selected != null && selected.id != t.id)
                 }
 
                 // 点击星光（最上层）
@@ -409,15 +452,92 @@ fun OrbitScreen(
             }
         }
 
-        // 中心：聚焦时展示详情卡（未聚焦 = 纯星空）
+        // 毛玻璃信息卡：镜头推近后浮现于行星下方；点空白退焦恢复
         if (selected != null) {
-            FocusCard(
-                t = selected,
-                zoom = zoom.value,
-                onCheck = { doCheck(selected) },
-                onOpenRecords = { onOpenRecords(selected.id) },
-                modifier = Modifier.align(Alignment.Center),
-            )
+            val pa = ((zoom.value - 0.55f) / 0.45f).coerceIn(0f, 1f)
+            val statusColor = when (selected.state) {
+                PlanetState.DONE -> GoldColor
+                PlanetState.LATE -> LateColor
+                else -> Color(0xFFB9C2D4)
+            }
+            val statusText = when (selected.state) {
+                PlanetState.DONE -> "✓ 本周期已点亮"
+                PlanetState.LATE -> "⚠ 已逾期 · 正在熄灭"
+                PlanetState.NEAR -> "临近到期 · 若隐若现"
+                PlanetState.PENDING -> "待打卡 · 黑白星"
+            }
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 18.dp, end = 18.dp, bottom = 26.dp)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        alpha = pa
+                        translationY = (1f - pa) * 90f
+                    }
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xD910141A))
+                    .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(28.dp))
+                    .pointerInput(Unit) { detectTapGestures { } }   // 消费面板内点击，避免透传退焦
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
+            ) {
+                Column {
+                    Text(
+                        selected.name,
+                        color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
+                        letterSpacing = 2.sp, maxLines = 1,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "${selected.cycleLabel} · 第 ${selected.circleNo} 圈 · 累计 ${selected.recordCount} 次",
+                        color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(statusText, color = statusColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
+                    if (selected.note.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(selected.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = { doCheck(selected) },
+                            enabled = selected.state != PlanetState.DONE,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = GoldColor,
+                                contentColor = Color(0xFF1A1408),
+                                disabledContainerColor = Color(0x44D8B36A),
+                                disabledContentColor = Color(0x88D8B36A),
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1.15f).height(44.dp),
+                        ) {
+                            Text(
+                                if (selected.state == PlanetState.DONE) "✓ 已打卡" else "打 卡",
+                                fontFamily = FontFamily.Serif, fontSize = 13.sp, letterSpacing = 2.sp,
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = { onEdit(selected.id) },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0x3DD8DEEE)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = InkColor),
+                            modifier = Modifier.weight(0.8f).height(44.dp),
+                        ) {
+                            Text("编辑", fontSize = 13.sp, fontFamily = FontFamily.Serif)
+                        }
+                        OutlinedButton(
+                            onClick = { onOpenRecords(selected.id) },
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0x3DD8DEEE)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = InkColor),
+                            modifier = Modifier.weight(0.8f).height(44.dp),
+                        ) {
+                            Text("记录", fontSize = 13.sp, fontFamily = FontFamily.Serif)
+                        }
+                    }
+                }
+            }
         }
 
         // 诊断行（定位渲染问题用，确认正常后移除）
@@ -650,105 +770,6 @@ private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long, star
     }
 }
 
-@Composable
-private fun FocusCard(
-    t: OrbitTask,
-    zoom: Float,
-    onCheck: () -> Unit,
-    onOpenRecords: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier
-            .size(248.dp)
-            .graphicsLayer {
-                alpha = zoom.coerceIn(0f, 1f)
-                scaleX = 0.9f + 0.1f * zoom
-                scaleY = 0.9f + 0.1f * zoom
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clip(CircleShape)
-                .background(CardBg)
-                .border(1.dp, CardBorder, CircleShape)
-                .padding(horizontal = 22.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    t.name,
-                    color = InkColor, fontSize = 22.sp, fontFamily = FontFamily.Serif,
-                    letterSpacing = 4.sp, maxLines = 1,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "${t.cycleLabel} · 第 ${t.circleNo} 圈",
-                    color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                val statusColor = when (t.state) {
-                    PlanetState.DONE -> GoldColor
-                    PlanetState.LATE -> LateColor
-                    else -> DueColor
-                }
-                Text(
-                    when (t.state) {
-                        PlanetState.DONE -> "✓ 本周期已点亮"
-                        PlanetState.LATE -> "⚠ 已逾期 · 正在熄灭"
-                        PlanetState.NEAR -> "临近到期 · 若隐若现"
-                        PlanetState.PENDING -> "待打卡 · 黑白星"
-                    },
-                    color = statusColor, fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.5.sp,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "⏱ ${t.nextText}",
-                    color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                val done = t.state == PlanetState.DONE
-                OutlinedButton(
-                    onClick = onCheck,
-                    enabled = !done,
-                    shape = RoundedCornerShape(2.dp),
-                    border = BorderStroke(1.dp, if (done) GoldDim else GoldDim),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = GoldColor,
-                        disabledContentColor = GoldColor.copy(alpha = 0.7f),
-                        disabledContainerColor = Color.Transparent,
-                    ),
-                ) {
-                    Text(
-                        if (done) "✓ 已打卡" else "打 卡",
-                        fontSize = 13.sp, fontFamily = FontFamily.Serif,
-                        letterSpacing = 6.sp, modifier = Modifier.padding(horizontal = 14.dp),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "累计 ${t.recordCount} 圈 · 最近 ${t.lastCheckText}",
-                    color = FaintColor, fontSize = 10.5.sp, fontFamily = FontFamily.Monospace,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "打卡记录 (${t.recordCount}) ›",
-                    color = DimColor, fontSize = 10.5.sp, fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.clickable { onOpenRecords() },
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "点击空白处 · 退出聚焦",
-                    color = FaintColor.copy(alpha = 0.8f), fontSize = 10.sp,
-                    fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
-                )
-            }
-        }
-    }
-}
-
 /** 方形位图 → 圆形（透明背景），供行星绘制 */
 private fun circleCrop(src: Bitmap): Bitmap {
     val size = minOf(src.width, src.height)
@@ -803,10 +824,10 @@ private fun DrawScope.drawStars(
     }
 }
 
-private fun DrawScope.drawOrbitLayer(g: Geo, zf: Float) {
+private fun DrawScope.drawOrbitLayer(g: Geo) {
     g.radiiPx.forEach { R ->
         drawArc(
-            Color(0xFFBEC8E1).copy(alpha = 0.16f * (1f - 0.35f * zf)),
+            Color(0xFFBEC8E1).copy(alpha = 0.16f),
             0f, 360f, false,
             topLeft = Offset(g.cx - R, g.cy - R * g.q),
             size = Size(R * 2f, R * g.q * 2f),
@@ -815,10 +836,10 @@ private fun DrawScope.drawOrbitLayer(g: Geo, zf: Float) {
     }
 }
 
-private fun DrawScope.drawAnchorTicks(g: Geo, items: List<OrbitTask>, zf: Float) {
+private fun DrawScope.drawAnchorTicks(g: Geo, items: List<OrbitTask>, labelFade: Float) {
     anchorPaint.textSize = 9.5f * g.s
     g.radiiPx.forEachIndexed { i, R ->
-        val y = g.cy - R * zf * g.q
+        val y = g.cy - R * g.q
         drawLine(Color(0x4DD8DEEE), Offset(g.cx, y - 4f * g.s), Offset(g.cx, y + 4f * g.s), strokeWidth = 1f * g.s)
         val label = items.filter { it.ring == i }.joinToString(" / ") { it.anchorLabel }
         if (label.isNotBlank()) {
@@ -836,12 +857,11 @@ private fun DrawScope.drawTask(
     t: OrbitTask,
     timeMs: Long,
     z: Float,
-    zf: Float,
     selected: OrbitTask?,
-    images: Map<Long, Bitmap>,
+    images: Map<Long, ImageBitmap>,
     dimmed: Boolean,
 ) {
-    val p = planetPos(g, t, zf)
+    val p = planetPos(g, t)
     if (timeMs % 2000L < 20L) {
         Log.d(
             "OrbitCanvas",
@@ -854,7 +874,7 @@ private fun DrawScope.drawTask(
     val sel = selected?.id == t.id
     val done = t.state == PlanetState.DONE
     val late = t.state == PlanetState.LATE
-    val R = g.radiiPx[t.ring] * zf
+    val R = g.radiiPx[t.ring]
     val ovalTopLeft = Offset(g.cx - R, g.cy - R * g.q)
     val ovalSize = Size(R * 2f, R * g.q * 2f)
 
@@ -905,17 +925,6 @@ private fun DrawScope.drawTask(
         drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), p.r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
     }
 
-    // 选中：星表十字准星
-    if (sel) {
-        val gap = p.r + 9f * g.s
-        val l = (5f + sin(timeMs / 900f) * 1.2f) * g.s
-        val c = Color(0xFFD8DEEE).copy(alpha = 0.75f * (0.4f + 0.6f * z))
-        listOf(-1f to 0f, 1f to 0f, 0f to -1f, 0f to 1f).forEach { (dx, dy) ->
-            drawLine(c, Offset(p.x + dx * (gap - l), p.y + dy * (gap - l)), Offset(p.x + dx * (gap + l), p.y + dy * (gap + l)), 1f * g.s)
-        }
-        drawCircle(Color(0xFFD8DEEE).copy(alpha = 0.22f * z), gap, Offset(p.x, p.y), style = Stroke(1f * g.s))
-    }
-
     // 已完成光晕（克制）
     if (done) {
         drawCircle(
@@ -939,7 +948,7 @@ private fun DrawScope.drawTask(
         val paint = if (done) planetPaintNormal else planetPaintGray
         paint.alpha = (alpha * 255).toInt()
         drawContext.canvas.nativeCanvas.drawBitmap(
-            bmp, null,
+            bmp.asAndroidBitmap(), null,
             RectF(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r),
             paint,
         )
@@ -968,9 +977,11 @@ private fun DrawScope.drawTask(
         hsla(t.hue, 0.45f, 0.8f, 0.95f * maxOf(dim, 0.5f))
     else
         Color(0xFFC4CCDE).copy(alpha = 0.85f * maxOf(dim, 0.5f))
-    namePaint.textSize = 11.5f * g.s
-    namePaint.setShadowLayer(5f * g.s, 0f, 1f * g.s, 0xE604060C.toInt())
-    drawTextNc(t.name, p.x, p.y + p.r + 14f * g.s, namePaint, nameColor.toArgb())
+    val nameScale = minOf(g.zoom, 2.6f)
+    namePaint.textSize = 11.5f * g.s * nameScale
+    namePaint.setShadowLayer(5f * g.s * nameScale, 0f, 1f * g.s * nameScale, 0xE604060C.toInt())
+    val labelFade = (1f - z * 0.9f).coerceIn(0.12f, 1f)
+    drawTextNc(t.name, p.x, p.y + p.r + 14f * g.s * nameScale, namePaint, nameColor.copy(alpha = nameColor.alpha * labelFade).toArgb())
 }
 
 private fun DrawScope.drawProceduralPlanet(
