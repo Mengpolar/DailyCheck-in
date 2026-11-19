@@ -19,6 +19,8 @@ data class Task(
     val note: String = "",
     val intervalDays: Int = 1,
     val anchorMin: Int = 0,
+    /** 每周任务的起始星期（1=周一..7=周日），仅 intervalDays==7 使用 */
+    val anchorWeekday: Int = 1,
     val createdEpochDay: Long,
     val lastDoneEpochDay: Long? = null,
     val imagePath: String? = null,
@@ -47,6 +49,8 @@ data class AppData(
 /** 当前周期窗口：行星从 startMs 出发，durMs 走完一圈到达 endMs */
 data class PeriodWindow(val startMs: Long, val endMs: Long, val durMs: Long)
 
+fun Task.anchorWeekdayChar(): String = "一二三四五六日"[anchorWeekday.coerceIn(1, 7) - 1].toString()
+
 fun Task.creationAnchorMs(): Long =
     // createdEpochDay 是本地时区的日期，0 点必须按本地时区换算 epoch
     // （直接乘 86400000 得到的是 UTC 0 点，UTC+8 下锚点整体偏移 +8 小时）
@@ -55,6 +59,15 @@ fun Task.creationAnchorMs(): Long =
 
 fun Task.periodWindow(nowMs: Long): PeriodWindow {
     val dur = intervalDays.coerceAtLeast(1) * 86_400_000L
+    // 每周任务：以指定的星期 + 起始时刻为周期始末（与创建日无关）
+    if (intervalDays == 7) {
+        val wd = java.time.DayOfWeek.of(anchorWeekday.coerceIn(1, 7))
+        var start = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
+            .with(java.time.temporal.TemporalAdjusters.previousOrSame(wd))
+            .atStartOfDay(ZONE).toInstant().toEpochMilli() + anchorMin.coerceIn(0, 1439) * 60_000L
+        if (nowMs < start) start -= dur
+        return PeriodWindow(start, start + dur, dur)
+    }
     val start0 = creationAnchorMs()
     val k = Math.floorDiv(nowMs - start0, dur)
     val start = start0 + k * dur
@@ -85,7 +98,11 @@ fun Task.planetState(nowMs: Long, lastCheckMs: Long?): PlanetState {
     return PlanetState.PENDING
 }
 
-fun Task.anchorLabel(): String = "%02d:%02d".format(anchorMin.coerceIn(0, 1439) / 60, anchorMin % 60)
+fun Task.anchorLabel(): String = when {
+    intervalDays == 7 -> "周" + anchorWeekdayChar() + " %02d:%02d".format(anchorMin.coerceIn(0, 1439) / 60, anchorMin % 60)
+    intervalDays == 1 -> "%02d:%02d".format(anchorMin.coerceIn(0, 1439) / 60, anchorMin % 60)
+    else -> "创建日起"
+}
 
 fun Task.cycleLabel(): String = when (intervalDays.coerceAtLeast(1)) {
     1 -> "每天"

@@ -132,6 +132,7 @@ private fun App() {
                     note = o.note,
                     intervalDays = o.intervalDays,
                     anchorMin = o.anchorMin,
+                    anchorWeekday = o.anchorWeekday,
                     cycleLabel = o.cycleLabel,
                     anchorLabel = o.anchorLabel,
                     done = o.state == com.mengpolar.dailycheck.data.PlanetState.DONE,
@@ -151,11 +152,11 @@ private fun App() {
                 if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
             },
             onDismiss = { showEditSheet = false },
-            onSave = { id, name, note, intervalDays, anchorMin, image ->
+            onSave = { id, name, note, intervalDays, anchorMin, anchorWeekday, image ->
                 if (id == null) {
-                    taskVm.addTask(name, note, intervalDays, anchorMin, image)
+                    taskVm.addTask(name, note, intervalDays, anchorMin, anchorWeekday, image)
                 } else {
-                    taskVm.editTask(id, name, note, intervalDays, anchorMin)
+                    taskVm.editTask(id, name, note, intervalDays, anchorMin, anchorWeekday)
                 }
                 pendingImage = null
                 showEditSheet = false

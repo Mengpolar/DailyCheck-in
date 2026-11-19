@@ -24,6 +24,7 @@ data class OrbitTask(
     val note: String,
     val intervalDays: Int,
     val anchorMin: Int,
+    val anchorWeekday: Int,
     val cycleLabel: String,
     val anchorLabel: String,
     val state: PlanetState,
@@ -58,6 +59,7 @@ data class TaskUi(
     val note: String,
     val intervalDays: Int,
     val anchorMin: Int,
+    val anchorWeekday: Int,
     val cycleLabel: String,
     val anchorLabel: String,
     val done: Boolean,
@@ -137,6 +139,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 note = task.note,
                 intervalDays = task.intervalDays,
                 anchorMin = task.anchorMin,
+                anchorWeekday = task.anchorWeekday,
                 cycleLabel = task.cycleLabel(),
                 anchorLabel = task.anchorLabel(),
                 state = state,
@@ -184,6 +187,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     note = task.note,
                     intervalDays = task.intervalDays,
                     anchorMin = task.anchorMin,
+                    anchorWeekday = task.anchorWeekday,
                     cycleLabel = task.cycleLabel(),
                     anchorLabel = task.anchorLabel(),
                     done = state == PlanetState.DONE,
@@ -207,13 +211,13 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addTask(
         name: String, note: String,
-        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+        intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?,
     ) {
-        repo.addTask(name, note, intervalDays, anchorMin, image)
+        repo.addTask(name, note, intervalDays, anchorMin, anchorWeekday, image)
         refresh()
     }
 
-    fun editTask(id: Long, name: String, note: String, intervalDays: Int, anchorMin: Int) {
+    fun editTask(id: Long, name: String, note: String, intervalDays: Int, anchorMin: Int, anchorWeekday: Int) {
         val existing = dataFlow.value.tasks.firstOrNull { it.id == id } ?: return
         repo.updateTask(
             existing.copy(
@@ -221,6 +225,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 note = note.trim(),
                 intervalDays = intervalDays.coerceAtLeast(1),
                 anchorMin = anchorMin.coerceIn(0, 1439),
+                anchorWeekday = anchorWeekday.coerceIn(1, 7),
             )
         )
         refresh()

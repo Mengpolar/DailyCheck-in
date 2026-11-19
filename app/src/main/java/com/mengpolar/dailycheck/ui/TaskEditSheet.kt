@@ -59,7 +59,7 @@ fun TaskEditSheet(
     onPickImage: () -> Unit,
     onRemoveImage: () -> Unit,
     onDismiss: () -> Unit,
-    onSave: (id: Long?, name: String, note: String, intervalDays: Int, anchorMin: Int, image: Bitmap?) -> Unit,
+    onSave: (id: Long?, name: String, note: String, intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var name by remember { mutableStateOf(initial?.name ?: "") }
@@ -67,6 +67,7 @@ fun TaskEditSheet(
     var intervalText by remember {
         mutableStateOf(initial?.intervalDays?.takeIf { it > 0 }?.toString() ?: "1")
     }
+    var weekday by remember { mutableStateOf(initial?.anchorWeekday?.coerceIn(1, 7) ?: 1) }
     var anchorText by remember {
         mutableStateOf(
             initial?.anchorMin?.let { "%02d:%02d".format(it / 60, it % 60) } ?: "00:00"
@@ -124,6 +125,21 @@ fun TaskEditSheet(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+            if (interval == 7) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("起始星期", fontSize = 12.sp, color = SheetDim, fontFamily = FontFamily.Monospace)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("一" to 1, "二" to 2, "三" to 3, "四" to 4, "五" to 5, "六" to 6, "日" to 7).forEach { (label, wd) ->
+                            FilterChip(
+                                selected = weekday == wd,
+                                onClick = { weekday = wd },
+                                label = { Text(label) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
             OutlinedTextField(
                 value = anchorText,
                 onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
@@ -177,7 +193,7 @@ fun TaskEditSheet(
             }
 
             Button(
-                onClick = { onSave(initial?.id, name.trim(), note.trim(), interval ?: 1, anchorMin ?: 0, pendingImage) },
+                onClick = { onSave(initial?.id, name.trim(), note.trim(), interval ?: 1, anchorMin ?: 0, weekday, pendingImage) },
                 enabled = canSave,
                 modifier = Modifier
                     .fillMaxWidth()

@@ -77,7 +77,7 @@ class TaskRepository private constructor(private val context: Context) {
 
     fun addTask(
         name: String, note: String,
-        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+        intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?,
     ): Task = synchronized(lock) {
         var task = Task(
             id = data.nextTaskId,
@@ -85,6 +85,7 @@ class TaskRepository private constructor(private val context: Context) {
             note = note.trim(),
             intervalDays = intervalDays.coerceAtLeast(1),
             anchorMin = anchorMin.coerceIn(0, 1439),
+            anchorWeekday = anchorWeekday.coerceIn(1, 7),
             createdEpochDay = LocalDate.now().toEpochDay(),
         )
         if (image != null) {

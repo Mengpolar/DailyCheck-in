@@ -498,7 +498,7 @@ private fun ArcNavBar(
             if (moon != null) {
                 // 圆盘直径 1.44 倍屏宽，圆心沉入屏幕底部，只露上部边缘
                 val diskR = w * 0.72f
-                val reveal = 26f * d + 100f * d * progress
+                val reveal = 44f * d + 106f * d * progress
                 val cym = h - reveal + diskR
                 val cxm = w / 2f
                 // 自转 ~1.5°/s：月面纹理沿边缘缓缓移动
