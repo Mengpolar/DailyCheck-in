@@ -8,18 +8,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
@@ -30,18 +30,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,12 +47,12 @@ import com.mengpolar.dailycheck.data.DetailUiState
 import com.mengpolar.dailycheck.data.TaskUi
 import com.mengpolar.dailycheck.data.formatDate
 import com.mengpolar.dailycheck.data.formatDateShort
-import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 
+/** 任务详情（历史）内容：作为底部弹窗嵌入（由 MainActivity 的 ModalBottomSheet 承载） */
 @Composable
 fun TaskDetailScreen(
     state: DetailUiState,
@@ -66,45 +60,37 @@ fun TaskDetailScreen(
     onEdit: (TaskUi) -> Unit,
     onDelete: (Long) -> Unit,
     onCheck: (Long) -> CheckRecord,
-    onUndo: (Long) -> Unit,
 ) {
-    val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        state.task.name,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { onEdit(state.task) }) {
-                        Icon(Icons.Rounded.Edit, contentDescription = "编辑")
-                    }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Rounded.Delete, contentDescription = "删除")
-                    }
-                },
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                state.task.name,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
             )
-        },
-        snackbarHost = { SnackbarHost(snackbar) },
-    ) { padding ->
+            IconButton(onClick = { onEdit(state.task) }) {
+                Icon(Icons.Rounded.Edit, contentDescription = "编辑")
+            }
+            IconButton(onClick = { showDeleteConfirm = true }) {
+                Icon(Icons.Rounded.Delete, contentDescription = "删除")
+            }
+            IconButton(onClick = onBack) {
+                Icon(Icons.Rounded.Close, contentDescription = "关闭")
+            }
+        }
         LazyColumn(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize(),
-            contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 40.dp),
+            modifier = Modifier.heightIn(max = 520.dp),
+            contentPadding = PaddingValues(20.dp, 4.dp, 20.dp, 40.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item(key = "summary") {
@@ -143,17 +129,7 @@ fun TaskDetailScreen(
                 item(key = "check_button") {
                     val t = state.task
                     Button(
-                        onClick = {
-                            val record = onCheck(t.id)
-                            scope.launch {
-                                val result = snackbar.showSnackbar(
-                                    message = "已打卡「${t.name}」",
-                                    actionLabel = "撤销",
-                                    withDismissAction = false,
-                                )
-                                if (result == SnackbarResult.ActionPerformed) onUndo(record.id)
-                            }
-                        },
+                        onClick = { onCheck(t.id) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(48.dp),

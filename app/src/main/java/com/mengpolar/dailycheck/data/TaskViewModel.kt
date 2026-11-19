@@ -41,6 +41,10 @@ data class OrbitTask(
     val recordCount: Int,
     /** 当前周期窗口结束时刻（epoch ms），聚焦页倒计时用 */
     val periodEndMs: Long,
+    /** 一次性任务的有效天数（0 = 非一次性） */
+    val onceDays: Int,
+    /** 当前处于周期的第 X 天（编辑表单回填用） */
+    val cycleDayX: Int,
     val hasImage: Boolean,
     val imagePath: String?,
 )
@@ -66,6 +70,8 @@ data class TaskUi(
     val done: Boolean,
     val statusText: String,
     val hasImage: Boolean,
+    val onceDays: Int = 0,
+    val cycleDayX: Int = 1,
 )
 
 data class DetailUiState(
@@ -120,15 +126,20 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun computeOrbit(d: AppData, nowMs: Long): OrbitUiState {
         val today = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
-        val items = d.tasks.mapIndexed { index, task ->
+        val todayEpochDay = today.toEpochDay()
+        val items = d.tasks.mapIndexedNotNull { index, task ->
             val lastMs = lastCheckMs(d, task.id)
             val state = task.planetState(nowMs, lastMs)
             val done = state == PlanetState.DONE
-            val records = d.records.filter { it.taskId == task.id }
             val window = task.periodWindow(nowMs)
+            // 一次性任务过期未打卡 → 消散，不再呈现
+            if (task.intervalDays <= 0 && !done && window.endMs < nowMs) return@mapIndexedNotNull null
+            val records = d.records.filter { it.taskId == task.id }
             val tail = if (done && lastMs != null) {
                 (1f - ((nowMs - lastMs).toFloat() / window.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
             } else 0f
+            val cycleDayX = if (task.intervalDays <= 0) 0
+            else (((todayEpochDay - task.createdEpochDay).coerceAtLeast(0) % task.intervalDays.coerceAtLeast(1)) + 1).toInt()
             OrbitTask(
                 id = task.id,
                 name = task.name,
@@ -148,6 +159,8 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
                 recordCount = records.size,
                 periodEndMs = window.endMs,
+                onceDays = task.onceDays,
+                cycleDayX = cycleDayX,
                 hasImage = task.imagePath != null,
                 imagePath = task.imagePath,
             )
@@ -189,6 +202,9 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                     done = state == PlanetState.DONE,
                     statusText = statusText,
                     hasImage = task.imagePath != null,
+                    onceDays = task.onceDays,
+                    cycleDayX = (((LocalDate.now().toEpochDay() - task.createdEpochDay).coerceAtLeast(0)
+                        % task.intervalDays.coerceAtLeast(1)) + 1).toInt(),
                 ),
                 recordCount = records.size,
                 lastRecordDate = records.maxOfOrNull { LocalDate.ofEpochDay(it.epochDay) },
@@ -207,21 +223,31 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addTask(
         name: String, note: String,
-        intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+        cycleDayX: Int = 1, onceDays: Int = 0,
     ) {
-        repo.addTask(name, note, intervalDays, anchorMin, anchorWeekday, image)
+        repo.addTask(name, note, intervalDays, anchorMin, image, cycleDayX, onceDays)
         refresh()
     }
 
-    fun editTask(id: Long, name: String, note: String, intervalDays: Int, anchorMin: Int, anchorWeekday: Int) {
+    fun editTask(
+        id: Long, name: String, note: String,
+        intervalDays: Int, anchorMin: Int,
+        cycleDayX: Int = 1, onceDays: Int = 0,
+    ) {
         val existing = dataFlow.value.tasks.firstOrNull { it.id == id } ?: return
+        val today = LocalDate.now().toEpochDay()
+        val once = intervalDays <= 0
+        val interval = if (once) 0 else intervalDays.coerceIn(1, 9999)
+        val x = if (once) 0 else cycleDayX.coerceIn(1, interval)
         repo.updateTask(
             existing.copy(
                 name = name.trim(),
                 note = note.trim(),
-                intervalDays = intervalDays.coerceAtLeast(1),
+                intervalDays = interval,
                 anchorMin = anchorMin.coerceIn(0, 1439),
-                anchorWeekday = anchorWeekday.coerceIn(1, 7),
+                createdEpochDay = if (once) today else today - x,
+                onceDays = if (once) onceDays.coerceIn(0, 36500) else 0,
             )
         )
         refresh()

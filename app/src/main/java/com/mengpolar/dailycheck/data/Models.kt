@@ -9,8 +9,9 @@ private val ZONE: ZoneId = ZoneId.systemDefault()
 
 /**
  * 一个循环周期性任务：每 intervalDays 天为一个周期，窗口以「起始时刻 anchorMin」
- * 为始末（如每天 20:00 → 次日 20:00）。填 1 即每天，填 7 即每周。
- * 周期网格锚定在创建日，打卡不移动窗口。
+ * 为始末（如每天 20:00 → 次日 20:00）。填 1 即每天。
+ * createdEpochDay 为当前周期的起始日；「当前第 X 天」创建时换算为 createdEpochDay = 今天 - X。
+ * once = true 时为一次性任务：intervalDays 视为 0，窗口为创建日起 onceDays 天，过期未打卡即消散。
  */
 @Serializable
 data class Task(
@@ -19,11 +20,13 @@ data class Task(
     val note: String = "",
     val intervalDays: Int = 1,
     val anchorMin: Int = 0,
-    /** 每周任务的起始星期（1=周一..7=周日），仅 intervalDays==7 使用 */
+    /** 每周任务的起始星期（1=周一..7=周日）——已废弃，保留字段兼容旧数据 */
     val anchorWeekday: Int = 1,
     val createdEpochDay: Long,
     val lastDoneEpochDay: Long? = null,
     val imagePath: String? = null,
+    /** 一次性任务（intervalDays 视为 0）的有效天数：截止 = createdEpochDay + onceDays 天 */
+    val onceDays: Int = 0,
 )
 
 /** 一次打卡记录 */
@@ -58,16 +61,13 @@ fun Task.creationAnchorMs(): Long =
         anchorMin.coerceIn(0, 1439) * 60_000L
 
 fun Task.periodWindow(nowMs: Long): PeriodWindow {
-    val dur = intervalDays.coerceAtLeast(1) * 86_400_000L
-    // 每周任务：以指定的星期 + 起始时刻为周期始末（与创建日无关）
-    if (intervalDays == 7) {
-        val wd = java.time.DayOfWeek.of(anchorWeekday.coerceIn(1, 7))
-        var start = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
-            .with(java.time.temporal.TemporalAdjusters.previousOrSame(wd))
-            .atStartOfDay(ZONE).toInstant().toEpochMilli() + anchorMin.coerceIn(0, 1439) * 60_000L
-        if (nowMs < start) start -= dur
+    // 一次性任务：窗口 = 创建日 anchorMin 起，onceDays 天后截止
+    if (intervalDays <= 0) {
+        val start = creationAnchorMs()
+        val dur = (onceDays.coerceAtLeast(0) * 86_400_000L).coerceAtLeast(3_600_000L)
         return PeriodWindow(start, start + dur, dur)
     }
+    val dur = intervalDays.coerceAtLeast(1) * 86_400_000L
     val start0 = creationAnchorMs()
     val k = Math.floorDiv(nowMs - start0, dur)
     val start = start0 + k * dur
@@ -104,9 +104,9 @@ fun Task.anchorLabel(): String = when {
     else -> "创建日起"
 }
 
-fun Task.cycleLabel(): String = when (intervalDays.coerceAtLeast(1)) {
-    1 -> "每天"
-    7 -> "每周"
+fun Task.cycleLabel(): String = when {
+    intervalDays <= 0 -> "一次性"
+    intervalDays.coerceAtLeast(1) == 1 -> "每天"
     else -> "每 ${intervalDays.coerceAtLeast(1)} 天"
 }
 

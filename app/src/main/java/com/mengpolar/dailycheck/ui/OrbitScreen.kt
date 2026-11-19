@@ -132,15 +132,14 @@ private class Geo(
     fun dp(v: Float) = v * s
 }
 
-private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ: Float): Geo {
+/** 轨道半径序列（px）：单轨道放大；多轨道 150dp 起步、60dp 间距；放不下整体等比缩小 */
+private fun orbitRadii(wPx: Float, hPx: Float, d: Float, orbitCount: Int): List<Float> {
+    if (orbitCount <= 0 || wPx <= 0f || hPx <= 0f) return emptyList()
     val s = d
     val capX = wPx / 2f - 26f * s
     val capY = hPx / 2f * 0.92f - 26f * s
     val cap = minOf(capX, capY)
-    // 每任务一条独立轨道：由内向外 150dp 起步、间距 60dp；
-    // 放不下时整盘等比缩小让最外圈完整展示；仅一条轨道时放大展示
-    val radii: List<Float> = when {
-        orbitCount <= 0 -> emptyList()
+    return when {
         orbitCount == 1 -> listOf(cap * 0.60f)
         else -> {
             val outerDp = 150f + 60f * (orbitCount - 1)
@@ -148,6 +147,22 @@ private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ:
             (0 until orbitCount).map { i -> (150f + 60f * i) * scale * s }
         }
     }
+}
+
+/** 半径插值：长度不同时以末值补位（新增轨道自上一外圈滑出，移除时滑回补位） */
+private fun lerpRadii(from: List<Float>, to: List<Float>, f: Float): List<Float> {
+    val n = maxOf(from.size, to.size)
+    if (n == 0) return emptyList()
+    return (0 until n).map { i ->
+        val a = from.getOrElse(i) { from.lastOrNull() ?: to.lastOrNull() ?: 0f }
+        val b = to.getOrElse(i) { to.lastOrNull() ?: from.lastOrNull() ?: 0f }
+        a + (b - a) * f
+    }
+}
+
+private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ: Float): Geo {
+    val s = d
+    val radii = orbitRadii(wPx, hPx, d, orbitCount)
     val planetScale = if (orbitCount <= 1) 1f
         else (radii.lastOrNull()?.let { it / ((150f + 60f * (orbitCount - 1)) * s) } ?: 1f).coerceIn(0.62f, 1f)
     return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScale)
@@ -171,7 +186,8 @@ private class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: 
 
 private fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
     val a = planetAngle(t.frac)
-    val R = g.radiiPx[t.ring]
+    // 布局过渡帧可能存在半径表短暂滞后，越界时回退到最外圈，避免绘制崩溃
+    val R = g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
@@ -185,10 +201,6 @@ private fun hsla(hue: Int, sat: Float, light: Float, alpha: Float) =
 // ── 共享画笔（避免每帧分配） ──
 private val namePaint = Paint().apply {
     typeface = Typeface.SERIF
-    textAlign = Paint.Align.CENTER; isAntiAlias = true
-}
-private val anchorPaint = Paint().apply {
-    typeface = Typeface.MONOSPACE
     textAlign = Paint.Align.CENTER; isAntiAlias = true
 }
 private val dimMatrix = ColorMatrix(floatArrayOf(
@@ -337,6 +349,77 @@ fun OrbitScreen(
     // 轨道盘倾角：q = 0.16（近侧视）~ 1（正俯视），空白区上下滑动调节
     var tiltQ by remember { mutableFloatStateOf(0.62f) }
 
+    // 轨道布局过渡：任务增删 / 盘面缩放时，轨道半径旧→新平滑插值
+    val targetRadii = remember(viewSize, state.items.size) {
+        orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size)
+    }
+    var settledRadii by remember { mutableStateOf<List<Float>?>(null) }
+    var animFrom by remember { mutableStateOf<List<Float>?>(null) }
+    var animTo by remember { mutableStateOf<List<Float>?>(null) }
+    val orbitAnim = remember { Animatable(1f) }
+    LaunchedEffect(targetRadii) {
+        val from = settledRadii
+        if (from == null || from == targetRadii) {
+            settledRadii = targetRadii
+            orbitAnim.snapTo(1f)
+            return@LaunchedEffect
+        }
+        animFrom = from
+        animTo = targetRadii
+        orbitAnim.snapTo(0f)
+        orbitAnim.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+        settledRadii = targetRadii
+    }
+
+    // 新增行星登场时刻 / 消散残影 / 上一帧任务快照
+    var spawnedAt by remember { mutableStateOf<Map<Long, Long>>(emptyMap()) }
+    var dissolving by remember { mutableStateOf(listOf<DissolvingPlanet>()) }
+    var prevItems by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
+    LaunchedEffect(state.items) {
+        val ids = state.items.map { it.id }.toSet()
+        val nowMs = withFrameNanos { it } / 1_000_000
+        // 选中任务被删除时自动退焦，避免聚焦卡引用已移除任务
+        if (selectedId != null && ids.none { it == selectedId }) selectedId = null
+        val added = ids - spawnedAt.keys
+        if (added.isNotEmpty()) spawnedAt = spawnedAt + added.associateWith { nowMs }
+        spawnedAt = spawnedAt.filterKeys { it in ids }
+        val gone = prevItems.filter { it.id !in ids }
+        if (gone.isNotEmpty()) {
+            dissolving = dissolving + gone.map { t ->
+                DissolvingPlanet(frac = t.frac, hue = t.hue, ring = t.ring, born = nowMs)
+            }
+        }
+        prevItems = state.items
+    }
+
+    // 拖尾星光粒子：已完成行星的彗尾上随机生成，向拖尾末端漂移并渐隐
+    val tailStars = remember { mutableStateListOf<TailStar>() }
+    LaunchedEffect(state.items) {
+        while (true) {
+            withFrameNanos { frameNanos ->
+                val nowMs = frameNanos / 1_000_000
+                tailStars.removeAll { nowMs - it.born > it.life }
+                dissolving = dissolving.filter { nowMs - it.born < 1000 }
+                if (tailStars.size < 90) {
+                    state.items.forEach { t ->
+                        if (t.state == PlanetState.DONE && t.tail > 0.04f && Random.nextFloat() < 0.03f) {
+                            tailStars.add(
+                                TailStar(
+                                    taskId = t.id,
+                                    born = nowMs,
+                                    life = Random.nextInt(1400, 2800).toLong(),
+                                    hue = Random.nextInt(360),
+                                    seed = Random.nextFloat(),
+                                    dir0 = Random.nextFloat() * 0.25f,
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 诊断几何（与 Canvas 内一致）
     val diagGeo = remember(viewSize, state.items.size, tiltQ) {
         computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltQ)
@@ -428,7 +511,15 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g0 = computeGeo(size.width, size.height, d, state.items.size, tiltQ)
+            val g0raw = computeGeo(size.width, size.height, d, state.items.size, tiltQ)
+            // 布局过渡中：以插值半径重排几何（新增轨道滑出 / 移除补位）
+            val g0 = if (orbitAnim.value < 1f && animFrom != null && animTo != null) {
+                Geo(
+                    g0raw.w, g0raw.h, g0raw.cx, g0raw.cy, g0raw.q,
+                    lerpRadii(animFrom!!, animTo!!, orbitAnim.value), g0raw.s,
+                    planetScale = g0raw.planetScale,
+                )
+            } else g0raw
             val z = zoom.value
             // 相机：行星先原地放大（前 40% 行程），随后在放大过程中缓缓滑向屏幕中心；
             // 落定时行星居中且直径≈屏宽。退焦沿同一曲线反向（先滑回轨道位置、再原地缩小）。
@@ -485,17 +576,43 @@ fun OrbitScreen(
                 val starShift = Offset((g0.cx - kx) * 0.25f * z, (g0.cy - ky) * 0.25f * z)
                 drawStars(g0, stars, timeMs, Offset(parallax.x * 1.3f + starShift.x, parallax.y * 1.3f + starShift.y), (1f - 0.55f * z).coerceIn(0.15f, 1f), sparkStar)
 
-                // 星系层：聚焦缩放通过轨道半径放大实现（无变换层，规避设备差异）
+                // 星系层：轨道半径已含相机缩放（轨道线弱化，仅作存在暗示）
                 drawOrbitLayer(g)
-                drawAnchorTicks(g, state.items, z)
                 state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
                     drawTask(
                         g, t, timeMs, z, selected, planetImages,
                         dimmed = selected != null && selected.id != t.id,
+                        spawn = ((timeMs - (spawnedAt[t.id] ?: 0L)).coerceAtLeast(0L))
+                            .toFloat().coerceIn(0f, 550f) / 550f,
                         fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
                             (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                     )
                 }
+
+                // 消散残影：任务移除/过期后放大渐隐
+                dissolving.forEach { dz ->
+                    val age = ((timeMs - dz.born) / 1000f).coerceIn(0f, 1f)
+                    if (age < 1f) {
+                        val R = g.radiiPx.getOrElse(dz.ring) { g.radiiPx.lastOrNull() ?: 0f }
+                        if (R > 0f) {
+                            val a = planetAngle(dz.frac)
+                            val rr = 18f * g.planetScale * g.s * (1f + 1.2f * age * age)
+                            val x = g.cx + sin(a) * R
+                            val y = g.cy - cos(a) * R * g.q
+                            drawCircle(
+                                Brush.radialGradient(
+                                    listOf(hsla(dz.hue, 0.5f, 0.7f, 0.5f * (1f - age)), Color.Black.copy(alpha = 0f)),
+                                    center = Offset(x, y), radius = rr * 1.7f,
+                                ),
+                                rr * 1.7f, Offset(x, y),
+                            )
+                            drawCircle(hsla(dz.hue, 0.4f, 0.75f, 0.6f * (1f - age)), rr, Offset(x, y), style = Stroke(1.2f * g.s))
+                        }
+                    }
+                }
+
+                // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐
+                drawTailStars(g, state.items, tailStars, timeMs, sparkStar)
 
                 // 点击星光（最上层）
                 drawSparks(g, sparks, timeMs, sparkStar)
@@ -782,28 +899,35 @@ private fun ArcNavBar(
                 horizontalArrangement = Arrangement.spacedBy(44.dp),
             ) {
                 listOf(
-                    R.drawable.ic_star_add to onAdd,
-                    R.drawable.ic_setting_btn to onOpenSettings,
-                ).forEach { (iconRes, onClick) ->
-                    Box(contentAlignment = Alignment.Center) {
-                        // 轻微黑色光晕：黑图标在亮月面上的衬底
-                        Box(
-                            Modifier
-                                .size(68.dp)
-                                .background(
-                                    Brush.radialGradient(
-                                        listOf(Color(0x59000000), Color(0x00000000))
+                    Triple("添加", R.drawable.ic_star_add, onAdd),
+                    Triple("设置", R.drawable.ic_setting_btn, onOpenSettings),
+                ).forEach { (label, iconRes, onClick) ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(contentAlignment = Alignment.Center) {
+                            // 黑色光晕：黑图标在亮月面上的衬底
+                            Box(
+                                Modifier
+                                    .size(78.dp)
+                                    .background(
+                                        Brush.radialGradient(
+                                            listOf(Color(0xB3000000), Color(0x00000000))
+                                        )
                                     )
-                                )
-                        )
-                        IconButton(onClick = onClick, enabled = clickable) {
-                            Icon(
-                                painter = painterResource(iconRes),
-                                contentDescription = null,
-                                tint = Color.Black,
-                                modifier = Modifier.size(40.dp),
                             )
+                            IconButton(onClick = onClick, enabled = clickable) {
+                                Icon(
+                                    painter = painterResource(iconRes),
+                                    contentDescription = label,
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(40.dp),
+                                )
+                            }
                         }
+                        Text(
+                            label,
+                            color = Color.Black, fontSize = 12.sp,
+                            fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
+                        )
                     }
                 }
             }
@@ -854,6 +978,24 @@ private data class Spark(
     val born: Long, // uptime ms，与帧时钟同基准
 )
 
+/** 拖尾星光粒子：从行星位置沿轨道向拖尾末端漂移并渐隐 */
+private data class TailStar(
+    val taskId: Long,
+    val born: Long,
+    val life: Long,
+    val hue: Int,
+    val seed: Float,
+    val dir0: Float, // 出生时沿拖尾的起始位置（0 = 行星处，1 = 拖尾末端）
+)
+
+/** 消散中的行星残影：任务移除 / 过期时短暂呈现，放大 + 渐隐 */
+private data class DissolvingPlanet(
+    val frac: Float,
+    val hue: Int,
+    val ring: Int,
+    val born: Long,
+)
+
 private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long, starBmp: ImageBitmap) {
     sparks.forEach { s ->
         val age = (timeMs - s.born).coerceAtLeast(0)
@@ -890,6 +1032,57 @@ private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long, star
         }
         // 白核
         drawCircle(Color.White.copy(alpha = alpha), (0.14f * base + 0.5f * g.s), center)
+    }
+}
+
+/** 拖尾星光：从行星位置沿轨道向拖尾末端漂移，逐渐缩小渐隐 */
+private fun DrawScope.drawTailStars(
+    g: Geo,
+    items: List<OrbitTask>,
+    stars: List<TailStar>,
+    timeMs: Long,
+    starBmp: ImageBitmap,
+) {
+    stars.forEach { s ->
+        val t = items.firstOrNull { it.id == s.taskId } ?: return@forEach
+        if (t.tail <= 0.02f) return@forEach
+        val R = g.radiiPx.getOrNull(t.ring) ?: return@forEach
+        val age = (timeMs - s.born).coerceAtLeast(0)
+        val lifeT = (age.toFloat() / s.life).coerceIn(0f, 1f)
+        if (lifeT >= 1f) return@forEach
+        val span = t.tail * 360f
+        val dir = s.dir0 + (1f - s.dir0) * lifeT
+        val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat() - span * dir
+        val rad = Math.toRadians(aDeg.toDouble())
+        val wobble = sin(age / 90f + s.seed * 9f) * 3f * g.s
+        val x = g.cx + sin(rad).toFloat() * (R + wobble)
+        val y = g.cy - cos(rad).toFloat() * (R + wobble) * g.q
+        val alpha = ((1f - lifeT) * (1f - lifeT) * 0.9f).coerceIn(0f, 1f)
+        val sizePx = ((2.6f + 3.4f * s.seed) * g.s * (1f - 0.35f * lifeT)).coerceAtLeast(1f)
+        val c = hsla(s.hue, 0.75f, 0.82f, 1f)
+        // 光晕
+        drawCircle(
+            Brush.radialGradient(
+                listOf(c.copy(alpha = 0.45f * alpha), Color.Black.copy(alpha = 0f)),
+                center = Offset(x, y), radius = sizePx * 2.4f,
+            ),
+            sizePx * 2.4f, Offset(x, y),
+        )
+        // 四芒星本体
+        val bmp = (sizePx * 2f).toInt().coerceAtLeast(2)
+        rotate(degrees = s.seed * 45f + age / 260f, pivot = Offset(x, y)) {
+            drawImage(
+                starBmp,
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(starBmp.width, starBmp.height),
+                dstOffset = IntOffset((x - bmp / 2f).toInt(), (y - bmp / 2f).toInt()),
+                dstSize = IntSize(bmp, bmp),
+                alpha = alpha,
+                filterQuality = FilterQuality.Medium,
+            )
+        }
+        // 白核
+        drawCircle(Color.White.copy(alpha = alpha), 0.9f * g.s, Offset(x, y))
     }
 }
 
@@ -950,24 +1143,12 @@ private fun DrawScope.drawStars(
 private fun DrawScope.drawOrbitLayer(g: Geo) {
     g.radiiPx.forEach { R ->
         drawArc(
-            Color(0xFFBEC8E1).copy(alpha = 0.16f),
+            Color(0xFFBEC8E1).copy(alpha = 0.08f),
             0f, 360f, false,
             topLeft = Offset(g.cx - R, g.cy - R * g.q),
             size = Size(R * 2f, R * g.q * 2f),
             style = Stroke(1.2f * g.s),
         )
-    }
-}
-
-private fun DrawScope.drawAnchorTicks(g: Geo, items: List<OrbitTask>, labelFade: Float) {
-    anchorPaint.textSize = 9.5f * g.s
-    g.radiiPx.forEachIndexed { i, R ->
-        val y = g.cy - R * g.q
-        drawLine(Color(0x4DD8DEEE), Offset(g.cx, y - 4f * g.s), Offset(g.cx, y + 4f * g.s), strokeWidth = 1f * g.s)
-        val label = items.filter { it.ring == i }.joinToString(" / ") { it.anchorLabel }
-        if (label.isNotBlank()) {
-            drawTextNc(label, g.cx, y - 9f * g.s, anchorPaint, DimColor.copy(alpha = 0.85f).toArgb())
-        }
     }
 }
 
@@ -984,6 +1165,7 @@ private fun DrawScope.drawTask(
     images: Map<Long, ImageBitmap>,
     dimmed: Boolean,
     fill: Float,
+    spawn: Float,
 ) {
     val p = planetPos(g, t)
     if (timeMs % 2000L < 20L) {
@@ -993,46 +1175,36 @@ private fun DrawScope.drawTask(
         )
     }
     val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat()
+    // 新行星登场：0.55→1.0 放大浮现（先快后慢）
+    val se = spawn * spawn * (3f - 2f * spawn)
+    val r = p.r * (0.55f + 0.45f * se)
     val dim = if (dimmed) 1f - 0.62f * z else 1f
     val depthA = 0.72f + 0.28f * p.nearness
     val sel = selected?.id == t.id
     val done = t.state == PlanetState.DONE
     val late = t.state == PlanetState.LATE
-    val R = g.radiiPx[t.ring]
+    val R = g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
     val ovalTopLeft = Offset(g.cx - R, g.cy - R * g.q)
     val ovalSize = Size(R * 2f, R * g.q * 2f)
 
-    // 周期进度弧：从起始线到行星当前位置（逾期用暗红弧）
-    val arcAlpha = 0.42f * dim
-    if (late) {
-        val segs = 14
-        for (i in 0 until segs) {
-            val f0 = i / segs.toFloat(); val f1 = (i + 1) / segs.toFloat()
-            drawArc(
-                LateColor.copy(alpha = 0.55f * dim * (1f - 0.4f * abs(f0 - 0.5f) * 2f)),
-                -90f + aDeg * f0, aDeg * (f1 - f0), false,
-                topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.6f * g.s),
-            )
-        }
-    } else {
-        drawArc(
-            hsla(t.hue, 0.5f, 0.58f, arcAlpha), -90f, aDeg, false,
-            topLeft = ovalTopLeft, size = ovalSize, style = Stroke(1.5f * g.s),
-        )
-    }
-
-    // 彗尾（打卡后随时间淡出，拖在行星后方）
+    // 彗尾（打卡后随时间淡出，拖在行星后方）：柔光底层 + 渐细渐隐主弧
     if (done && t.tail > 0f) {
         val span = t.tail * 360f
-        val segs = 18
+        drawArc(
+            hsla(t.hue, 0.6f, 0.6f, 0.07f * dim),
+            -90f + aDeg - span, span, false,
+            topLeft = ovalTopLeft, size = ovalSize,
+            style = Stroke((r * 0.6f).coerceAtLeast(3f * g.s)),
+        )
+        val segs = 24
         for (i in 0 until segs) {
             val f0 = i / segs.toFloat(); val f1 = (i + 1) / segs.toFloat()
-            val al = (1f - f0) * (1f - f0) * 0.4f * dim
+            val al = (1f - f0) * (1f - f0) * 0.42f * dim
             drawArc(
                 hsla(t.hue, 0.65f, 0.68f, al),
                 -90f + aDeg - span * f1, span * (f1 - f0), false,
                 topLeft = ovalTopLeft, size = ovalSize,
-                style = Stroke(maxOf(0.8f * g.s, p.r * 0.55f * (1f - f0))),
+                style = Stroke(maxOf(0.8f * g.s, r * 0.55f * (1f - f0))),
             )
         }
     }
@@ -1040,13 +1212,13 @@ private fun DrawScope.drawTask(
     // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
     if (t.state == PlanetState.NEAR) {
         val pulse = 0.3f + 0.32f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
-        drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), p.r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.3f * g.s))
+        drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.3f * g.s))
     }
     if (late) {
-        drawCircle(LateColor.copy(alpha = 0.5f * dim), p.r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.2f * g.s))
+        drawCircle(LateColor.copy(alpha = 0.5f * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.2f * g.s))
     }
     if (t.state == PlanetState.PENDING) {
-        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), p.r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
+        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
     }
 
     // 已完成光晕（克制）
@@ -1054,18 +1226,18 @@ private fun DrawScope.drawTask(
         drawCircle(
             Brush.radialGradient(
                 listOf(hsla(t.hue, 0.6f, 0.62f, 0.22f * dim), Color.Black.copy(alpha = 0f)),
-                center = Offset(p.x, p.y), radius = p.r * 2.1f,
+                center = Offset(p.x, p.y), radius = r * 2.1f,
             ),
-            p.r * 2.1f, Offset(p.x, p.y),
+            r * 2.1f, Offset(p.x, p.y),
         )
     }
 
     // 行星本体
-    val alpha = (depthA * dim * when (t.state) {
+    val alpha = ((depthA * dim * when (t.state) {
         PlanetState.NEAR -> 0.55f + 0.28f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
         PlanetState.LATE -> 0.62f
         else -> 1f
-    } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)
+    } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
 
     val bmp = images[t.id]
     if (bmp != null) {
@@ -1073,35 +1245,35 @@ private fun DrawScope.drawTask(
         paint.alpha = (alpha * 255).toInt()
         drawContext.canvas.nativeCanvas.drawBitmap(
             bmp.asAndroidBitmap(), null,
-            RectF(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r),
+            RectF(p.x - r, p.y - r, p.x + r, p.y + r),
             paint,
         )
         // 长按打卡填充：从下往上恢复行星原本的颜色（仅聚焦选中且未完成时）
         if (sel && !done && fill > 0f) {
             planetPaintNormal.alpha = (alpha * 255).toInt()
             clipRect(
-                left = p.x - p.r,
-                top = p.y + p.r - 2f * p.r * fill,
-                right = p.x + p.r,
-                bottom = p.y + p.r,
+                left = p.x - r,
+                top = p.y + r - 2f * r * fill,
+                right = p.x + r,
+                bottom = p.y + r,
             ) {
                 drawContext.canvas.nativeCanvas.drawBitmap(
                     bmp.asAndroidBitmap(), null,
-                    RectF(p.x - p.r, p.y - p.r, p.x + p.r, p.y + p.r),
+                    RectF(p.x - r, p.y - r, p.x + r, p.y + r),
                     planetPaintNormal,
                 )
             }
         }
     } else {
-        drawProceduralPlanet(p.x, p.y, p.r, t.hue, done, alpha)
+        drawProceduralPlanet(p.x, p.y, r, t.hue, done, alpha)
         if (sel && !done && fill > 0f) {
             clipRect(
-                left = p.x - p.r,
-                top = p.y + p.r - 2f * p.r * fill,
-                right = p.x + p.r,
-                bottom = p.y + p.r,
+                left = p.x - r,
+                top = p.y + r - 2f * r * fill,
+                right = p.x + r,
+                bottom = p.y + r,
             ) {
-                drawProceduralPlanet(p.x, p.y, p.r, t.hue, true, alpha)
+                drawProceduralPlanet(p.x, p.y, r, t.hue, true, alpha)
             }
         }
     }
@@ -1109,11 +1281,11 @@ private fun DrawScope.drawTask(
     drawCircle(
         Brush.radialGradient(
             listOf(Color(0x00000000), Color(0x59000000)),
-            center = Offset(p.x, p.y), radius = p.r,
+            center = Offset(p.x, p.y), radius = r,
         ),
-        p.r, Offset(p.x, p.y),
+        r, Offset(p.x, p.y),
     )
-    drawCircle(Color(0x59FFFFFF), p.r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
+    drawCircle(Color(0x59FFFFFF), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
 
     // 名字注记（衬线 + 投影）
     val nameColor = if (done)
@@ -1124,7 +1296,7 @@ private fun DrawScope.drawTask(
     namePaint.textSize = 11.5f * g.s * nameScale
     namePaint.setShadowLayer(5f * g.s * nameScale, 0f, 1f * g.s * nameScale, 0xE604060C.toInt())
     val labelFade = (1f - z * 0.9f).coerceIn(0.12f, 1f)
-    drawTextNc(t.name, p.x, p.y + p.r + 14f * g.s * nameScale, namePaint, nameColor.copy(alpha = nameColor.alpha * labelFade).toArgb())
+    drawTextNc(t.name, p.x, p.y + r + 14f * g.s * nameScale, namePaint, nameColor.copy(alpha = nameColor.alpha * labelFade * se).toArgb())
 }
 
 private fun DrawScope.drawProceduralPlanet(

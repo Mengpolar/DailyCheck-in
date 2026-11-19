@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.mengpolar.dailycheck
 
 import android.graphics.Bitmap
@@ -20,6 +22,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -79,29 +83,37 @@ private fun App() {
     }
     val checkIn: (Long) -> CheckRecord = { taskVm.checkIn(it) }
 
-    when {
-        showSettings -> SettingsScreen(
-            vm = updateVm,
-            onBack = { showSettings = false },
-        )
-        detailState != null -> detailState?.let { ds ->
+    // 星空页常驻；设置 / 任务详情 以底部弹窗呈现
+    OrbitScreen(
+        state = orbitState,
+        onAdd = { openEdit(null) },
+        onOpenSettings = { showSettings = true },
+        onOpenRecords = { taskVm.openDetail(it) },
+        onCheck = checkIn,
+        onEdit = { id -> openEdit(id) },
+    )
+
+    if (showSettings) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { showSettings = false }, sheetState = sheetState) {
+            SettingsScreen(
+                vm = updateVm,
+                onBack = { showSettings = false },
+            )
+        }
+    }
+
+    detailState?.let { ds ->
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { taskVm.openDetail(null) }, sheetState = sheetState) {
             TaskDetailScreen(
                 state = ds,
                 onBack = { taskVm.openDetail(null) },
                 onEdit = { openEdit(it.id) },
                 onDelete = { taskVm.deleteTask(it) },
                 onCheck = checkIn,
-                onUndo = { taskVm.undoCheck(it) },
             )
         }
-        else -> OrbitScreen(
-            state = orbitState,
-            onAdd = { openEdit(null) },
-            onOpenSettings = { showSettings = true },
-            onOpenRecords = { taskVm.openDetail(it) },
-            onCheck = checkIn,
-            onEdit = { id -> openEdit(id) },
-        )
     }
 
     val context = LocalContext.current
@@ -138,6 +150,8 @@ private fun App() {
                     done = o.state == com.mengpolar.dailycheck.data.PlanetState.DONE,
                     statusText = "",
                     hasImage = o.hasImage,
+                    onceDays = o.onceDays,
+                    cycleDayX = o.cycleDayX,
                 )
             }
         }
@@ -152,11 +166,11 @@ private fun App() {
                 if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
             },
             onDismiss = { showEditSheet = false },
-            onSave = { id, name, note, intervalDays, anchorMin, anchorWeekday, image ->
+            onSave = { id, name, note, intervalDays, anchorMin, image, cycleDayX, onceDays ->
                 if (id == null) {
-                    taskVm.addTask(name, note, intervalDays, anchorMin, anchorWeekday, image)
+                    taskVm.addTask(name, note, intervalDays, anchorMin, image, cycleDayX, onceDays)
                 } else {
-                    taskVm.editTask(id, name, note, intervalDays, anchorMin, anchorWeekday)
+                    taskVm.editTask(id, name, note, intervalDays, anchorMin, cycleDayX, onceDays)
                 }
                 pendingImage = null
                 showEditSheet = false

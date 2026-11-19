@@ -59,27 +59,41 @@ fun TaskEditSheet(
     onPickImage: () -> Unit,
     onRemoveImage: () -> Unit,
     onDismiss: () -> Unit,
-    onSave: (id: Long?, name: String, note: String, intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?) -> Unit,
+    onSave: (
+        id: Long?, name: String, note: String,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+        cycleDayX: Int, onceDays: Int,
+    ) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var note by remember { mutableStateOf(initial?.note ?: "") }
+    // 周期类型：intervalDays == 0 → 一次性（永不重复）
+    var onceMode by remember { mutableStateOf(initial?.let { it.intervalDays <= 0 } ?: false) }
     var intervalText by remember {
         mutableStateOf(initial?.intervalDays?.takeIf { it > 0 }?.toString() ?: "1")
     }
-    var weekday by remember { mutableStateOf(initial?.anchorWeekday?.coerceIn(1, 7) ?: 1) }
+    var dayXText by remember { mutableStateOf(initial?.cycleDayX?.takeIf { it > 0 }?.toString() ?: "1") }
+    var onceDaysText by remember {
+        mutableStateOf(initial?.onceDays?.takeIf { it > 0 }?.toString() ?: "1")
+    }
     var anchorText by remember {
         mutableStateOf(
             initial?.anchorMin?.let { "%02d:%02d".format(it / 60, it % 60) } ?: "00:00"
         )
     }
     val interval = intervalText.toIntOrNull()
+    val dayX = dayXText.toIntOrNull()
+    val onceDays = onceDaysText.toIntOrNull()
     val anchorMin = anchorText.split(":").let { parts ->
         val h = parts.getOrNull(0)?.trim()?.toIntOrNull()
         val m = parts.getOrNull(1)?.trim()?.toIntOrNull()
         if (h != null && m != null && h in 0..23 && m in 0..59) h * 60 + m else null
     }
-    val canSave = name.isNotBlank() && (interval ?: 0) >= 1 && anchorMin != null
+    val intervalOk = !onceMode && (interval ?: 0) >= 1 &&
+        (interval == 1 || (dayX ?: 0) in 1..(interval ?: 1))
+    val onceOk = onceMode && (onceDays ?: -1) >= 0
+    val canSave = name.isNotBlank() && anchorMin != null && (intervalOk || onceOk)
     val hasPlanetImage = imageSet || pendingImage != null
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -102,54 +116,75 @@ fun TaskEditSheet(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("重复周期", fontSize = 12.sp, color = SheetDim, fontFamily = FontFamily.Monospace)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("每天" to 1, "每周" to 7, "每月" to 30).forEach { (label, n) ->
-                        FilterChip(
-                            selected = interval == n,
-                            onClick = { intervalText = n.toString() },
-                            label = { Text(label) },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = intervalText,
-                    onValueChange = { intervalText = it.filter { c -> c.isDigit() }.take(3) },
-                    label = { Text("每 N 天") },
-                    supportingText = { Text("填 1 即每天，填 7 即每周；周期网格从创建日起算") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    isError = interval == null || (interval ?: 0) < 1,
-                    modifier = Modifier.fillMaxWidth(),
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !onceMode,
+                    onClick = { onceMode = false },
+                    label = { Text("重复") },
+                    modifier = Modifier.weight(1f),
+                )
+                FilterChip(
+                    selected = onceMode,
+                    onClick = { onceMode = true },
+                    label = { Text("永不重复") },
+                    modifier = Modifier.weight(1f),
                 )
             }
-            if (interval == 7) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("起始星期", fontSize = 12.sp, color = SheetDim, fontFamily = FontFamily.Monospace)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("一" to 1, "二" to 2, "三" to 3, "四" to 4, "五" to 5, "六" to 6, "日" to 7).forEach { (label, wd) ->
-                            FilterChip(
-                                selected = weekday == wd,
-                                onClick = { weekday = wd },
-                                label = { Text(label) },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
+            if (!onceMode) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = intervalText,
+                        onValueChange = { intervalText = it.filter { c -> c.isDigit() }.take(3) },
+                        label = { Text("每 N 天") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = interval == null || (interval ?: 0) < 1,
+                        modifier = Modifier.weight(1.1f),
+                    )
+                    OutlinedTextField(
+                        value = anchorText,
+                        onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
+                        label = { Text("始末时刻") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = anchorMin == null,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                val n = interval ?: 1
+                if (n > 1) {
+                    OutlinedTextField(
+                        value = dayXText,
+                        onValueChange = { dayXText = it.filter { c -> c.isDigit() }.take(3) },
+                        label = { Text("当前第 X 天（1-$n）") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = dayX == null || dayX < 1 || dayX > n,
+                        modifier = Modifier.width(180.dp),
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = onceDaysText,
+                        onValueChange = { onceDaysText = it.filter { c -> c.isDigit() }.take(4) },
+                        label = { Text("还有 N 天") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = onceDays == null || (onceDays ?: 0) < 0,
+                        modifier = Modifier.weight(1.1f),
+                    )
+                    OutlinedTextField(
+                        value = anchorText,
+                        onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
+                        label = { Text("结束时刻") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        isError = anchorMin == null,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
-            OutlinedTextField(
-                value = anchorText,
-                onValueChange = { anchorText = it.filter { c -> c.isDigit() || c == ':' }.take(5) },
-                label = { Text("起始时刻（起始线）") },
-                supportingText = { Text("每周期以该时刻为始末，如 05:30、20:00；行星此刻沿轨道出发") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                isError = anchorMin == null,
-                modifier = Modifier.fillMaxWidth(),
-            )
             OutlinedTextField(
                 value = note,
                 onValueChange = { note = it },
@@ -193,7 +228,15 @@ fun TaskEditSheet(
             }
 
             Button(
-                onClick = { onSave(initial?.id, name.trim(), note.trim(), interval ?: 1, anchorMin ?: 0, weekday, pendingImage) },
+                onClick = {
+                    if (onceMode) {
+                        onSave(initial?.id, name.trim(), note.trim(), 0, anchorMin ?: 0, pendingImage, 0, onceDays ?: 0)
+                    } else {
+                        val n = (interval ?: 1).coerceIn(1, 999)
+                        val x = if (n == 1) 1 else (dayX ?: 1).coerceIn(1, n)
+                        onSave(initial?.id, name.trim(), note.trim(), n, anchorMin ?: 0, pendingImage, x, 0)
+                    }
+                },
                 enabled = canSave,
                 modifier = Modifier
                     .fillMaxWidth()

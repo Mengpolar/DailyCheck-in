@@ -75,18 +75,29 @@ class TaskRepository private constructor(private val context: Context) {
 
     fun snapshot(): AppData = synchronized(lock) { data }
 
+    /**
+     * 新建任务。
+     * 重复任务（intervalDays ≥ 1）：cycleDayX =「当前第 X 天」(1..N)，换算
+     * createdEpochDay = 今天 - X，使下个周期恰好在 (N-X) 天后的 anchorMin 时刻到来。
+     * 一次性任务（intervalDays = 0）：onceDays = 还有 N 天，截止 = 今天 + N 天的 anchorMin 时刻。
+     */
     fun addTask(
         name: String, note: String,
-        intervalDays: Int, anchorMin: Int, anchorWeekday: Int, image: Bitmap?,
+        intervalDays: Int, anchorMin: Int, image: Bitmap?,
+        cycleDayX: Int = 1, onceDays: Int = 0,
     ): Task = synchronized(lock) {
+        val today = LocalDate.now().toEpochDay()
+        val once = intervalDays <= 0
+        val interval = if (once) 0 else intervalDays.coerceIn(1, 9999)
+        val x = if (once) 0 else cycleDayX.coerceIn(1, interval)
         var task = Task(
             id = data.nextTaskId,
             name = name.trim(),
             note = note.trim(),
-            intervalDays = intervalDays.coerceAtLeast(1),
+            intervalDays = interval,
             anchorMin = anchorMin.coerceIn(0, 1439),
-            anchorWeekday = anchorWeekday.coerceIn(1, 7),
-            createdEpochDay = LocalDate.now().toEpochDay(),
+            createdEpochDay = if (once) today else today - x,
+            onceDays = if (once) onceDays.coerceIn(0, 36500) else 0,
         )
         if (image != null) {
             savePlanetImageLocked(task.id, image)
