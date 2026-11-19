@@ -244,7 +244,7 @@ fun OrbitScreen(
                     BitmapFactory.decodeFile(
                         f.absolutePath,
                         BitmapFactory.Options().apply { inSampleSize = sample },
-                    )?.let { put(t.id, it) }
+                    )?.let { put(t.id, circleCrop(it)) }
                 }
             }
         }
@@ -668,6 +668,23 @@ private fun FocusCard(
             }
         }
     }
+}
+
+/** 方形位图 → 圆形（透明背景），供行星绘制 */
+private fun circleCrop(src: Bitmap): Bitmap {
+    val size = minOf(src.width, src.height)
+    val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val c = android.graphics.Canvas(out)
+    val paint = Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    c.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+    paint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_IN)
+    paint.shader = android.graphics.BitmapShader(
+        src,
+        android.graphics.Shader.TileMode.CLAMP,
+        android.graphics.Shader.TileMode.CLAMP,
+    )
+    c.drawRect(0f, 0f, size.toFloat(), size.toFloat(), paint)
+    return out
 }
 
 private data class StarSpec(

@@ -48,7 +48,10 @@ data class AppData(
 data class PeriodWindow(val startMs: Long, val endMs: Long, val durMs: Long)
 
 fun Task.creationAnchorMs(): Long =
-    createdEpochDay * 86_400_000L + anchorMin.coerceIn(0, 1439) * 60_000L
+    // createdEpochDay 是本地时区的日期，0 点必须按本地时区换算 epoch
+    // （直接乘 86400000 得到的是 UTC 0 点，UTC+8 下锚点整体偏移 +8 小时）
+    LocalDate.ofEpochDay(createdEpochDay).atStartOfDay(ZONE).toInstant().toEpochMilli() +
+        anchorMin.coerceIn(0, 1439) * 60_000L
 
 fun Task.periodWindow(nowMs: Long): PeriodWindow {
     val dur = intervalDays.coerceAtLeast(1) * 86_400_000L
