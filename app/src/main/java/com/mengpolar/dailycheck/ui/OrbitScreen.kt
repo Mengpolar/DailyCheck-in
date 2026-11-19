@@ -65,12 +65,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -78,6 +80,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -274,6 +277,23 @@ fun OrbitScreen(
         sparks.add(Spark(x, y, sparkRnd.nextInt(360), sparkRnd.nextFloat(), now))
     }
 
+    // 月球贴图（用户提供的月面照片，透明背景）：弧形导航的自转月面
+    val moonImage = remember {
+        runCatching { BitmapFactory.decodeResource(context.resources, R.drawable.moon)?.asImageBitmap() }.getOrNull()
+    }
+    // 星光贴图：star.svg 转白的位图，点击特效动态染色/缩放/旋转
+    val sparkStar = remember {
+        val sizePx = 256
+        val out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(out)
+        val dr = context.getDrawable(R.drawable.ic_star_add)
+        if (dr != null) {
+            dr.setBounds(0, 0, sizePx, sizePx)
+            dr.setTint(Color.White.toArgb())
+            dr.draw(c)
+        }
+        out.asImageBitmap()
+    }
     // 背景图（黑洞星云）：与星系画在同一个 Canvas 里，保证行星永远在背景之上
     val bgImage = remember {
         runCatching {
@@ -372,7 +392,7 @@ fun OrbitScreen(
                 }
 
                 // 点击星光（最上层）
-                drawSparks(g, sparks, timeMs)
+                drawSparks(g, sparks, timeMs, sparkStar)
             } catch (t: Throwable) {
                 // 渲染异常兜底：屏上直接显示错误，避免整片黑无从排查
                 Log.e("OrbitCanvas", "draw failed", t)
@@ -411,6 +431,8 @@ fun OrbitScreen(
         ArcNavBar(
             onAdd = onAdd,
             onOpenSettings = onOpenSettings,
+            moonImage = moonImage,
+            timeMs = timeMs,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
 
@@ -428,6 +450,8 @@ fun OrbitScreen(
 private fun ArcNavBar(
     onAdd: () -> Unit,
     onOpenSettings: () -> Unit,
+    moonImage: ImageBitmap?,
+    timeMs: Long,
     modifier: Modifier = Modifier,
 ) {
     val anim = remember { Animatable(0f) }
@@ -461,7 +485,7 @@ private fun ArcNavBar(
                 }
             },
     ) {
-        // 视觉月面带：对齐热区盒底部
+        // 视觉月面：月球圆盘自转，上缘即弧形地平线；随 progress 刚性升起
         Canvas(
             Modifier
                 .fillMaxWidth()
@@ -470,48 +494,52 @@ private fun ArcNavBar(
         ) {
             val d = this.density
             val w = size.width; val h = size.height
-            // 弧度恒定的月面：曲线相对盒顶形状不变，整条弧随盒刚性上移（盒随屏底对齐）
-            val rise = h - 40f * d
-            val edgeY = h - 18f * d - rise
-            val apexY = h - 40f * d - rise
-            val ctrlY = 2f * apexY - edgeY
-            val curve = Path().apply {
-                moveTo(0f, edgeY)
-                quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
-            }
-            // 月面：灰色渐变带
-            val band = Path().apply {
-                moveTo(0f, h)
-                lineTo(0f, edgeY)
-                quadraticBezierTo(w / 2f, ctrlY, w, edgeY)
-                lineTo(w, h)
-                close()
-            }
-            drawPath(
-                band,
-                Brush.verticalGradient(
-                    listOf(Color(0xFF3E4552), Color(0xFF1A1F28), Color(0xFF0D1016)),
-                    startY = edgeY, endY = h,
-                ),
-            )
-            // 月面边缘光（晕 + 亮线）
-            drawPath(
-                curve,
-                Brush.horizontalGradient(
-                    listOf(Color(0x1FD8DEEE), Color(0x59E8ECF4), Color(0x1FD8DEEE)),
-                    startX = 0f, endX = w,
-                ),
-                style = Stroke(5f),
-            )
-            drawPath(curve, Color(0x99E8ECF4), style = Stroke(1.2f))
-            // 陨石坑（沿曲线均匀分布）
-            listOf(0.14f, 0.30f, 0.5f, 0.70f, 0.86f).forEachIndexed { i, t0 ->
-                val mt = 1f - t0
-                val cx = 2f * mt * t0 * (w / 2f) + t0 * t0 * w
-                val cy = mt * mt * edgeY + 2f * mt * t0 * ctrlY + t0 * t0 * edgeY
-                val cr = (3.5f + (i % 3) * 2.2f) * d
-                drawCircle(Color(0x66222A35), cr, Offset(cx, cy + cr * 0.4f))
-                drawCircle(Color(0x4D5A6478), cr, Offset(cx, cy + cr * 0.4f), style = Stroke(1f))
+            val moon = moonImage
+            if (moon != null) {
+                // 圆盘直径 1.44 倍屏宽，圆心沉入屏幕底部，只露上部边缘
+                val diskR = w * 0.72f
+                val reveal = 26f * d + 100f * d * progress
+                val cym = h - reveal + diskR
+                val cxm = w / 2f
+                // 自转 ~1.5°/s：月面纹理沿边缘缓缓移动
+                val rot = (timeMs * 0.0015f) % 360f
+                // 月缘上方柔光
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(Color(0x2BE8ECF4), Color(0x000D1016)),
+                        center = Offset(cxm, cym - diskR * 0.92f),
+                        radius = diskR * 0.85f,
+                    ),
+                    diskR * 0.85f, Offset(cxm, cym - diskR * 0.92f),
+                )
+                val dw = diskR * 2f
+                val dh = dw * moon.height.toFloat() / moon.width.toFloat()
+                rotate(degrees = rot, pivot = Offset(cxm, cym)) {
+                    drawImage(
+                        moon,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(moon.width, moon.height),
+                        dstOffset = IntOffset((cxm - dw / 2f).toInt(), (cym - dh / 2f).toInt()),
+                        dstSize = IntSize(dw.toInt(), dh.toInt()),
+                        filterQuality = FilterQuality.Medium,
+                    )
+                }
+            } else {
+                // 兜底：无月图时绘制灰色弧带
+                val band = Path().apply {
+                    moveTo(0f, h)
+                    lineTo(0f, h * 0.4f)
+                    quadraticBezierTo(w / 2f, -h * 0.2f, w, h * 0.4f)
+                    lineTo(w, h)
+                    close()
+                }
+                drawPath(
+                    band,
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF3E4552), Color(0xFF0D1016)),
+                        startY = h * 0.3f, endY = h,
+                    ),
+                )
             }
         }
         val clickable = progress > 0.5f
@@ -523,10 +551,20 @@ private fun ArcNavBar(
             horizontalArrangement = Arrangement.spacedBy(64.dp),
         ) {
             IconButton(onClick = onAdd, enabled = clickable) {
-                Icon(Icons.Rounded.Add, "添加任务", tint = GoldColor)
+                Icon(
+                    painter = painterResource(R.drawable.ic_star_add),
+                    contentDescription = "添加任务",
+                    tint = GoldColor,
+                    modifier = Modifier.size(30.dp),
+                )
             }
             IconButton(onClick = onOpenSettings, enabled = clickable) {
-                Icon(Icons.Rounded.Settings, "设置", tint = DimColor)
+                Icon(
+                    painter = painterResource(R.drawable.ic_setting_btn),
+                    contentDescription = "设置",
+                    tint = Color(0xFFB9C2D4),
+                    modifier = Modifier.size(26.dp),
+                )
             }
         }
     }
@@ -538,7 +576,7 @@ private data class Spark(
     val born: Long, // uptime ms，与帧时钟同基准
 )
 
-private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long) {
+private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long, starBmp: ImageBitmap) {
     sparks.forEach { s ->
         val age = (timeMs - s.born).coerceAtLeast(0)
         if (age > 5000) return@forEach
@@ -558,16 +596,22 @@ private fun DrawScope.drawSparks(g: Geo, sparks: List<Spark>, timeMs: Long) {
             ),
             base * 2.6f, center,
         )
-        // 四芒射线（水平/垂直长，对角短）
-        val rayL = base * (1.1f + 0.5f * tw)
-        val rayS = base * 0.45f
-        val stroke = 1.4f * g.s
-        drawLine(c.copy(alpha = 0.9f * alpha), Offset(s.x - rayL, s.y), Offset(s.x + rayL, s.y), stroke)
-        drawLine(c.copy(alpha = 0.9f * alpha), Offset(s.x, s.y - rayL), Offset(s.x, s.y + rayL), stroke)
-        drawLine(c.copy(alpha = 0.55f * alpha), Offset(s.x - rayS, s.y - rayS), Offset(s.x + rayS, s.y + rayS), stroke * 0.8f)
-        drawLine(c.copy(alpha = 0.55f * alpha), Offset(s.x - rayS, s.y + rayS), Offset(s.x + rayS, s.y - rayS), stroke * 0.8f)
+        // 四芒星贴图：随机 0/45° 起始角 + 缓慢自旋
+        val sizePx = (base * 2.6f).toInt().coerceAtLeast(1)
+        val rot = s.seed * 45f + age / 300f
+        rotate(degrees = rot, pivot = center) {
+            drawImage(
+                starBmp,
+                srcOffset = IntOffset.Zero,
+                srcSize = IntSize(starBmp.width, starBmp.height),
+                dstOffset = IntOffset((s.x - sizePx / 2f).toInt(), (s.y - sizePx / 2f).toInt()),
+                dstSize = IntSize(sizePx, sizePx),
+                alpha = alpha.coerceIn(0f, 1f),
+                filterQuality = FilterQuality.Medium,
+            )
+        }
         // 白核
-        drawCircle(Color.White.copy(alpha = alpha), (0.16f * base + 0.6f * g.s), center)
+        drawCircle(Color.White.copy(alpha = alpha), (0.14f * base + 0.5f * g.s), center)
     }
 }
 

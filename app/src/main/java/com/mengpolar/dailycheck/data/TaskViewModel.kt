@@ -120,7 +120,7 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         // 同轨道行星按创建顺序错开 10° 相位，避免完全重叠
         val jitterMap = mutableMapOf<Long, Float>()
         d.tasks.groupBy { it.orbitRing() }.forEach { (_, list) ->
-            list.forEachIndexed { j, t -> jitterMap[t.id] = j * 24f }
+            list.forEachIndexed { j, t -> jitterMap[t.id] = j * 40f }
         }
         val items = d.tasks.map { task ->
             val lastMs = lastCheckMs(d, task.id)
