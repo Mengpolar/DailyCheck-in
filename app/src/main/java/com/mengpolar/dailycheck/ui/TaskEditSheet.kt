@@ -248,27 +248,14 @@ fun TaskEditSheet(
                                 }
                             }
                         }
-                        BracketButton("[ 载入图像 ]", onClick = onPickImage)
+                        BracketButton(
+                            if (hasPlanetImage) "[ 移除图像 ]" else "[ 载入图像 ]",
+                            onClick = if (hasPlanetImage) onRemoveImage else onPickImage,
+                        )
                         if (hasPlanetImage) {
                             Text(
                                 "· 已装载",
                                 color = TermBlue, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                            )
-                            Text(
-                                "移除",
-                                color = TermBlueDim,
-                                fontSize = 12.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier
-                                    .padding(4.dp)
-                                    .clickable(onClick = onRemoveImage),
-                            )
-                        } else {
-                            Text(
-                                "未装载 · 将生成程序星体",
-                                color = TermBlueDim.copy(alpha = 0.75f),
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
                             )
                         }
                     }

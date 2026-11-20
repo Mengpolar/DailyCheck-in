@@ -89,7 +89,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -243,6 +247,8 @@ fun OrbitScreen(
     val context = LocalContext.current
     val screenDensity = LocalDensity.current.density
     var selectedId by remember { mutableStateOf<Long?>(null) }
+    // 月球导航展开状态（提升到顶层：空白点击收起 / 聚焦时自动收起）
+    var arcTarget by remember { mutableFloatStateOf(0f) }
     val selected = state.items.firstOrNull { it.id == selectedId }
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
@@ -257,6 +263,8 @@ fun OrbitScreen(
 
     // 聚焦缩放动画：推近 ~1.2s / 退焦 ~0.9s，缓入缓出（行星自中心放大 / 缩小）
     val zoom = remember { Animatable(0f) }
+    // 设备姿态（陀螺仪）：驱动聚焦行星的质感与轻微翻转
+    val deviceTilt by rememberTilt()
     LaunchedEffect(selectedId) {
         if (selectedId != null) {
             zoom.animateTo(1f, tween(1200, easing = FastOutSlowInEasing))
@@ -576,6 +584,9 @@ fun OrbitScreen(
                         }
                         // 已聚焦时行星吞没整屏、无空白可点：再点选中行星本身 = 退焦；未聚焦时点行星 = 聚焦
                         selectedId = if (best != null && best.id == selectedId) null else best?.id
+                        // 聚焦发生时自动收起月球导航；展开状态下点击空白区域也收起
+                        if (selectedId != null && arcTarget > 0.5f) arcTarget = 0f
+                        if (best == null && zoom.value <= 0.05f && arcTarget > 0.5f) arcTarget = 0f
                         // 弧形导航区域内的 tap 交给弧自身处理；点中行星时不生成星光（避免放大的行星表面残留星点）
                         if (best == null && tap.y < size.height - 100f * screenDensity) addSpark(tap.x, tap.y)
                     }
@@ -652,6 +663,7 @@ fun OrbitScreen(
                 state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
                     drawTask(
                         g, t, timeMs, z, selected, planetImages,
+                        tilt = deviceTilt,
                         dimmed = selected != null && selected.id != t.id,
                         spawn = ((timeMs - (spawnedAt[t.id] ?: 0L)).coerceAtLeast(0L))
                             .toFloat().coerceIn(0f, 550f) / 550f,
@@ -718,7 +730,7 @@ fun OrbitScreen(
                 else -> TermInk
             }
 
-            // 顶部信息卡：任务名称 / 周期 / 倒计时 / 已完成周期数；聚焦时从上往下出现，退焦反向
+            // 顶部信息卡（票根式）：左侧数据区 | 虚线分隔 | 右侧长按删除区；聚焦时从上往下出现，退焦反向
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
@@ -731,12 +743,11 @@ fun OrbitScreen(
                     .clip(RoundedCornerShape(14.dp))
                     .background(Color(0xB3101214))
                     .border(1.dp, TermBlueDim.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
-                    // 仅占位命中路径挡住透传（空 handler 不消费事件，子删除钮才能收到长按）
-                    .pointerInput(Unit) { }
-                    .padding(horizontal = 22.dp, vertical = 16.dp),
+                    // 仅占位命中路径挡住透传（空 handler 不消费事件，子删除区才能收到长按）
+                    .pointerInput(Unit) { },
             ) {
-                Row {
-                    Column(Modifier.weight(1f)) {
+                Row(Modifier.height(IntrinsicSize.Min)) {
+                    Column(Modifier.weight(1f).padding(horizontal = 18.dp, vertical = 16.dp)) {
                         Text(
                             t.name,
                             color = TermInk, fontSize = 20.sp, fontFamily = FontFamily.Monospace,
@@ -757,16 +768,22 @@ fun OrbitScreen(
                             Text(t.note, color = TermBlueDim, fontSize = 12.sp, maxLines = 2, fontFamily = FontFamily.Monospace)
                         }
                     }
-                    // 长按 3 秒删除任务：红色填充（同打卡按钮），完成后轨道行星消散，无撤销
+                    // 票根虚线打孔分隔
+                    Canvas(Modifier.fillMaxHeight().width(1.dp)) {
+                        drawLine(
+                            TermBlueDim.copy(alpha = 0.55f),
+                            Offset(size.width / 2, 10.dp.toPx()),
+                            Offset(size.width / 2, size.height - 10.dp.toPx()),
+                            strokeWidth = 1.5f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
+                        )
+                    }
+                    // 长按 3 秒删除任务（整个票根右侧区域可按）：红色从左往右填充，完成后轨道行星消散，无撤销
                     val delFill = (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
                     Box(
                         Modifier
-                            .align(Alignment.CenterVertically)
-                            .padding(start = 10.dp)
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(TermRed.copy(alpha = 0.12f))
-                            .border(1.dp, TermRed.copy(alpha = 0.6f), CircleShape)
+                            .width(84.dp)
+                            .fillMaxHeight()
                             .pointerInput(t.id) {
                                 detectTapGestures(
                                     onPress = {
@@ -775,25 +792,23 @@ fun OrbitScreen(
                                     },
                                 )
                             },
-                        contentAlignment = Alignment.Center,
                     ) {
                         Canvas(Modifier.fillMaxSize()) {
                             if (delFill > 0f) {
-                                val circle = Path().apply { addOval(Rect(0f, 0f, size.width, size.height)) }
-                                clipPath(circle) {
-                                    drawRect(
-                                        TermRed,
-                                        topLeft = Offset.Zero,
-                                        size = Size(size.width * delFill, size.height),
-                                    )
-                                }
+                                drawRect(
+                                    TermRed,
+                                    topLeft = Offset.Zero,
+                                    size = Size(size.width * delFill, size.height),
+                                )
                             }
                         }
                         Icon(
                             Icons.Rounded.Delete,
                             contentDescription = "长按删除任务",
-                            tint = lerp(InkColor, Color.White, delFill),
-                            modifier = Modifier.size(20.dp),
+                            tint = lerp(TermRed, Color.White, delFill),
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(20.dp),
                         )
                     }
                 }
@@ -853,7 +868,7 @@ fun OrbitScreen(
                         }
                         Text(
                             when {
-                                done -> "✓ 本周期已点亮"
+                                done -> "本周期已点亮"
                                 fillFrac > 0f -> "${(fillFrac * 100).toInt()}%"
                                 else -> "长按打卡"
                             },
@@ -892,6 +907,8 @@ fun OrbitScreen(
             moonImage = moonImage,
             timeMs = timeMs,
             dim = zoom.value,
+            target = arcTarget,
+            onTargetChange = { arcTarget = it },
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
@@ -905,10 +922,11 @@ private fun ArcNavBar(
     moonImage: ImageBitmap?,
     timeMs: Long,
     dim: Float,
+    target: Float,
+    onTargetChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val anim = remember { Animatable(0f) }
-    var target by remember { mutableFloatStateOf(0f) }
+    val anim = remember { Animatable(target) }
     val scope = rememberCoroutineScope()
     val progress = anim.value
 
@@ -934,14 +952,14 @@ private fun ArcNavBar(
                             detectVerticalDragGestures { change, dragAmount ->
                                 change.consume()
                                 val next = (anim.value - dragAmount / 240f).coerceIn(0f, 1f)
-                                target = next
+                                onTargetChange(next)
                                 scope.launch { anim.snapTo(next) } // 拖动跟手
                             }
                         }
                         .pointerInput(Unit) {
                             detectTapGestures {
                                 Log.d("OrbitCanvas", "arc tapped, anim=${anim.value} -> ${if (anim.value > 0.5f) 0 else 1}")
-                                target = if (anim.value > 0.5f) 0f else 1f
+                                onTargetChange(if (anim.value > 0.5f) 0f else 1f)
                             }
                         }
                 } else Modifier
@@ -1043,6 +1061,7 @@ private fun ArcNavBar(
                             label,
                             color = Color.Black, fontSize = 12.sp,
                             fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
+                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
@@ -1283,6 +1302,7 @@ private fun DrawScope.drawTask(
     z: Float,
     selected: OrbitTask?,
     images: Map<Long, ImageBitmap>,
+    tilt: Tilt = Tilt(),
     dimmed: Boolean,
     fill: Float,
     delFill: Float,
@@ -1300,7 +1320,7 @@ private fun DrawScope.drawTask(
     // 新行星登场：0.55→1.0 放大浮现（先快后慢）
     val se = spawn * spawn * (3f - 2f * spawn)
     val r = p.r * (0.55f + 0.45f * se)
-    val dim = if (dimmed) 1f - 0.62f * z else 1f
+    val dim = if (dimmed) 1f - z else 1f // 聚焦时其他行星随缩放完全淡出（同月球）
     val depthA = 0.72f + 0.28f * p.nearness
     val sel = selected?.id == t.id
     val done = t.state == PlanetState.DONE
@@ -1362,26 +1382,29 @@ private fun DrawScope.drawTask(
     } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
 
     val bmp = images[t.id]
+    // 聚焦态轻微左右翻转：水平压缩（幅度随陀螺仪，很小）
+    val yaw = tilt.y * 0.3f
+    val halfW = if (sel) r * cos(yaw) else r
     if (bmp != null) {
         val paint = if (done) planetPaintNormal else planetPaintGray
         paint.alpha = (alpha * 255).toInt()
         drawContext.canvas.nativeCanvas.drawBitmap(
             bmp.asAndroidBitmap(), null,
-            RectF(p.x - r, p.y - r, p.x + r, p.y + r),
+            RectF(p.x - halfW, p.y - r, p.x + halfW, p.y + r),
             paint,
         )
         // 长按打卡填充：从下往上恢复行星原本的颜色（仅聚焦选中且未完成时）
         if (sel && !done && fill > 0f) {
             planetPaintNormal.alpha = (alpha * 255).toInt()
             clipRect(
-                left = p.x - r,
+                left = p.x - halfW,
                 top = p.y + r - 2f * r * fill,
-                right = p.x + r,
+                right = p.x + halfW,
                 bottom = p.y + r,
             ) {
                 drawContext.canvas.nativeCanvas.drawBitmap(
                     bmp.asAndroidBitmap(), null,
-                    RectF(p.x - r, p.y - r, p.x + r, p.y + r),
+                    RectF(p.x - halfW, p.y - r, p.x + halfW, p.y + r),
                     planetPaintNormal,
                 )
             }
@@ -1397,6 +1420,30 @@ private fun DrawScope.drawTask(
             ) {
                 drawProceduralPlanet(p.x, p.y, r, t.hue, true, alpha)
             }
+        }
+    }
+    // 聚焦态陀螺仪质感：随姿态偏移的球面暗面 + 高光斑（与设备面板反光同源）
+    if (sel) {
+        val sphere = Path().apply { addOval(Rect(p.x - r, p.y - r, p.x + r, p.y + r)) }
+        clipPath(sphere) {
+            // 暗面：随左右翻转移动
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.10f + 0.26f * abs(sin(yaw)))),
+                    center = Offset(p.x + sin(yaw) * r * 0.9f, p.y - r * 0.1f),
+                    radius = r * 1.02f,
+                ),
+                r, Offset(p.x, p.y),
+            )
+            // 高光斑：随姿态漂移
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
+                    center = Offset(p.x - tilt.y * r * 0.45f, p.y - r * 0.42f - tilt.x * r * 0.15f),
+                    radius = r * 0.85f,
+                ),
+                r, Offset(p.x, p.y),
+            )
         }
     }
     // 液态玻璃质感：球面暗角 + 边缘亮环（高光斑移除——聚焦放大后会显形为一个圆叠在行星上）

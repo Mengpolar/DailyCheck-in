@@ -2,6 +2,12 @@ package com.mengpolar.dailycheck.ui
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -56,11 +62,24 @@ fun SettingsScreen(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            // 屏内标题行（带闪烁光标）
+            val blinkT = rememberInfiniteTransition(label = "blink")
+            val blink by blinkT.animateFloat(
+                1f, 0.15f,
+                infiniteRepeatable(tween(850, easing = LinearEasing), RepeatMode.Reverse),
+                label = "blinkA",
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "系统设置_",
+                    "系统设置",
                     color = TermBlueBright, fontSize = 15.sp,
                     fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
+                )
+                Text(
+                    "_",
+                    color = TermBlueBright.copy(alpha = blink),
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace,
                 )
                 Spacer(Modifier.weight(1f))
                 BracketButton("[ 关闭 ]", onClick = onBack)
@@ -151,15 +170,6 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(20.dp))
-            Text(
-                "每日打卡 · 记录循环周期性事件",
-                color = TermBlueDim.copy(alpha = 0.6f), fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp, bottom = 6.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
         }
     }
 }

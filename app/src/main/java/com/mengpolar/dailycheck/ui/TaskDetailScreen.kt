@@ -4,6 +4,10 @@ package com.mengpolar.dailycheck.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -86,12 +90,26 @@ fun TaskDetailScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item(key = "title") {
-                Text(
-                    "历史记录_",
-                    color = TermBlueBright, fontSize = 15.sp,
-                    fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
-                    modifier = Modifier.padding(bottom = 6.dp),
+                val blinkT = rememberInfiniteTransition(label = "blink")
+                val blink by blinkT.animateFloat(
+                    1f, 0.15f,
+                    infiniteRepeatable(tween(850, easing = LinearEasing), RepeatMode.Reverse),
+                    label = "blinkA",
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "历史记录",
+                        color = TermBlueBright, fontSize = 15.sp,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
+                    )
+                    Text(
+                        "_",
+                        color = TermBlueBright.copy(alpha = blink),
+                        fontSize = 15.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
             }
             if (state.records.isEmpty()) {
                 item(key = "empty") {
