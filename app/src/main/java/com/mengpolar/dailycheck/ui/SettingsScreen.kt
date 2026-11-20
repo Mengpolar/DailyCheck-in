@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mengpolar.dailycheck.data.TaskViewModel
 import com.mengpolar.dailycheck.update.UpdateManager
 import com.mengpolar.dailycheck.update.UpdateState
 import com.mengpolar.dailycheck.update.UpdateViewModel
@@ -47,10 +48,12 @@ import com.mengpolar.dailycheck.update.UpdateViewModel
 @Composable
 fun SettingsScreen(
     vm: UpdateViewModel,
+    taskVm: TaskViewModel,
     onBack: () -> Unit,
 ) {
     val state by vm.state.collectAsState()
     val autoCheck by vm.autoCheck.collectAsState()
+    val showNames by taskVm.showPlanetNames.collectAsState()
     val context = LocalContext.current
 
     DeviceShell(modifier = Modifier.fillMaxSize(), nameplate = "系统控制单元") {
@@ -112,6 +115,38 @@ fun SettingsScreen(
                     Switch(
                         checked = autoCheck,
                         onCheckedChange = { vm.setAutoCheck(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TermBlueBright,
+                            checkedTrackColor = TermBlue.copy(alpha = 0.45f),
+                            checkedBorderColor = TermBlue,
+                            uncheckedThumbColor = TermBlueDim,
+                            uncheckedTrackColor = Color(0x2AFFFFFF),
+                            uncheckedBorderColor = TermBlueDim.copy(alpha = 0.5f),
+                        ),
+                    )
+                }
+                RowDivider()
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "行星名称",
+                            color = TermInk, fontSize = 14.sp, fontFamily = FontFamily.Monospace,
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            "隐藏或展示主页行星下方的任务名称",
+                            color = TermBlueDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Switch(
+                        checked = showNames,
+                        onCheckedChange = { taskVm.setShowPlanetNames(it) },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = TermBlueBright,
                             checkedTrackColor = TermBlue.copy(alpha = 0.45f),

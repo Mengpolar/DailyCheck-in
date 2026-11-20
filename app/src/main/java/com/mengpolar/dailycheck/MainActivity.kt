@@ -63,6 +63,7 @@ private fun App() {
 
     val orbitState by taskVm.orbitState.collectAsState()
     val detailState by taskVm.detailState.collectAsState()
+    val showPlanetNames by taskVm.showPlanetNames.collectAsState()
 
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showEditSheet by rememberSaveable { mutableStateOf(false) }
@@ -89,6 +90,7 @@ private fun App() {
     // 星空页常驻；设置 / 任务详情 以底部弹窗呈现
     OrbitScreen(
         state = orbitState,
+        showPlanetNames = showPlanetNames,
         onAdd = { openEdit(null) },
         onOpenSettings = { showSettings = true },
         onOpenRecords = { taskVm.openDetail(it) },
@@ -109,6 +111,7 @@ private fun App() {
         ) {
             SettingsScreen(
                 vm = updateVm,
+                taskVm = taskVm,
                 onBack = { showSettings = false },
             )
         }

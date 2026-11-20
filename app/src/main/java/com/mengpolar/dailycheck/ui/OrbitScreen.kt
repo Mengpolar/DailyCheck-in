@@ -53,6 +53,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -237,6 +238,7 @@ private val crackPaintLight = Paint().apply {
 @Composable
 fun OrbitScreen(
     state: OrbitUiState,
+    showPlanetNames: Boolean,
     onAdd: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenRecords: (Long) -> Unit,
@@ -249,6 +251,19 @@ fun OrbitScreen(
     var selectedId by remember { mutableStateOf<Long?>(null) }
     // 月球导航展开状态（提升到顶层：空白点击收起 / 聚焦时自动收起）
     var arcTarget by remember { mutableFloatStateOf(0f) }
+    // 行星筛选：0=全部 1=未完成 2=已完成（月球导航筛选键循环切换）
+    var filterMode by remember { mutableIntStateOf(0) }
+    // 按筛选模式取可见任务；显示环序按可见集合重排（隐藏/恢复时轨道补位让位）
+    val visibleTasks = remember(state.items, filterMode) {
+        when (filterMode) {
+            1 -> state.items.filter { it.state != PlanetState.DONE }
+            2 -> state.items.filter { it.state == PlanetState.DONE }
+            else -> state.items
+        }
+    }
+    val displayItems = remember(visibleTasks) {
+        visibleTasks.mapIndexed { i, t -> t.copy(ring = i) }
+    }
     val selected = state.items.firstOrNull { it.id == selectedId }
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
@@ -386,9 +401,9 @@ fun OrbitScreen(
     var tiltLastUptime by remember { mutableStateOf(0L) }
     var tiltLastQ by remember { mutableFloatStateOf(0.62f) }
 
-    // 轨道布局过渡：任务增删 / 盘面缩放时，轨道半径旧→新平滑插值
-    val targetRadii = remember(viewSize, state.items.size) {
-        orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size)
+    // 轨道布局过渡：任务增删 / 筛选切换 / 盘面缩放时，轨道半径旧→新平滑插值
+    val targetRadii = remember(viewSize, displayItems.size) {
+        orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size)
     }
     var settledRadii by remember { mutableStateOf<List<Float>?>(null) }
     var animFrom by remember { mutableStateOf<List<Float>?>(null) }
@@ -408,37 +423,45 @@ fun OrbitScreen(
         settledRadii = targetRadii
     }
 
-    // 新增行星登场时刻 / 消散残影 / 上一帧任务快照
+    // 新增行星登场时刻 / 消散残影 / 上一帧可见任务快照
     var spawnedAt by remember { mutableStateOf<Map<Long, Long>>(emptyMap()) }
     var dissolving by remember { mutableStateOf(listOf<DissolvingPlanet>()) }
-    var prevItems by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
+    var prevDisplay by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
     LaunchedEffect(state.items) {
-        val ids = state.items.map { it.id }.toSet()
-        val nowMs = withFrameNanos { it } / 1_000_000
         // 选中任务被删除时自动退焦，避免聚焦卡引用已移除任务
+        val ids = state.items.map { it.id }.toSet()
         if (selectedId != null && ids.none { it == selectedId }) selectedId = null
-        val added = ids - spawnedAt.keys
-        if (added.isNotEmpty()) spawnedAt = spawnedAt + added.associateWith { nowMs }
-        spawnedAt = spawnedAt.filterKeys { it in ids }
-        val gone = prevItems.filter { it.id !in ids }
+    }
+    LaunchedEffect(displayItems) {
+        val nowMs = withFrameNanos { it } / 1_000_000
+        val newIds = displayItems.map { it.id to it.ring }.toSet()
+        val prevIds = prevDisplay.map { it.id to it.ring }.toSet()
+        // 新登场（新任务 / 筛选后重新可见 / 环序变化）：重新播放入场动画
+        val added = displayItems.filter { (it.id to it.ring) !in prevIds }
+        if (added.isNotEmpty()) {
+            spawnedAt = spawnedAt + added.associate { it.id to nowMs }
+        }
+        spawnedAt = spawnedAt.filterKeys { id -> displayItems.any { it.id == id } }
+        // 消失（删除 / 被筛选隐藏 / 环序变化让位）：旧位置放大渐隐
+        val gone = prevDisplay.filter { (it.id to it.ring) !in newIds }
         if (gone.isNotEmpty()) {
             dissolving = dissolving + gone.map { t ->
                 DissolvingPlanet(frac = t.frac, hue = t.hue, ring = t.ring, born = nowMs)
             }
         }
-        prevItems = state.items
+        prevDisplay = displayItems
     }
 
     // 拖尾星光粒子：已完成行星的彗尾上随机生成，向拖尾末端漂移并渐隐
     val tailStars = remember { mutableStateListOf<TailStar>() }
-    LaunchedEffect(state.items) {
+    LaunchedEffect(displayItems) {
         while (true) {
             withFrameNanos { frameNanos ->
                 val nowMs = frameNanos / 1_000_000
                 tailStars.removeAll { nowMs - it.born > it.life }
                 dissolving = dissolving.filter { nowMs - it.born < 1000 }
                 if (tailStars.size < 90) {
-                    state.items.forEach { t ->
+                    displayItems.forEach { t ->
                         if (t.state == PlanetState.DONE && t.tail > 0.04f && Random.nextFloat() < 0.03f) {
                             tailStars.add(
                                 TailStar(
@@ -552,11 +575,11 @@ fun OrbitScreen(
                         },
                     )
                 }
-                .pointerInput(state.items, viewSize) {
+                .pointerInput(displayItems, viewSize) {
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
                         Log.d("OrbitCanvas", "main tap=(${tap.x},${tap.y}) sparkZone=${tap.y < size.height - 100f * screenDensity} canvasSize=${size.width}x${size.height}")
-                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, state.items.size, tiltAnim.value)
+                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size, tiltAnim.value)
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
                         val selNow = state.items.firstOrNull { it.id == selectedId } ?: recentSelected
@@ -577,7 +600,7 @@ fun OrbitScreen(
                         val tx = tap.x; val ty = tap.y
                         var best: OrbitTask? = null
                         var bd = 1e9f
-                        state.items.forEach { t ->
+                        displayItems.forEach { t ->
                             val p = planetPos(g, t)
                             val dist = hypot((tx - p.x).toDouble(), (ty - p.y).toDouble()).toFloat()
                             if (dist < p.r + 30f * screenDensity && dist < bd) { bd = dist; best = t }
@@ -593,7 +616,7 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g0raw = computeGeo(size.width, size.height, d, state.items.size, tiltAnim.value)
+            val g0raw = computeGeo(size.width, size.height, d, displayItems.size, tiltAnim.value)
             // 布局过渡中：以插值半径重排几何（新增轨道滑出 / 移除补位）
             val g0 = if (orbitAnim.value < 1f && animFrom != null && animTo != null) {
                 Geo(
@@ -660,10 +683,11 @@ fun OrbitScreen(
 
                 // 星系层：轨道半径已含相机缩放（轨道线弱化，仅作存在暗示）
                 drawOrbitLayer(g)
-                state.items.sortedBy { planetPos(g, it).nearness }.forEach { t ->
+                displayItems.sortedBy { planetPos(g, it).nearness }.forEach { t ->
                     drawTask(
                         g, t, timeMs, z, selected, planetImages,
                         tilt = deviceTilt,
+                        showName = showPlanetNames,
                         dimmed = selected != null && selected.id != t.id,
                         spawn = ((timeMs - (spawnedAt[t.id] ?: 0L)).coerceAtLeast(0L))
                             .toFloat().coerceIn(0f, 550f) / 550f,
@@ -697,8 +721,8 @@ fun OrbitScreen(
                     }
                 }
 
-                // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐
-                drawTailStars(g, state.items, tailStars, timeMs, sparkStar)
+                // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐（仅当前可见行星）
+                drawTailStars(g, displayItems, tailStars, timeMs, sparkStar)
 
                 // 点击星光（最上层）
                 drawSparks(g, sparks, timeMs, sparkStar)
@@ -900,10 +924,16 @@ fun OrbitScreen(
                 .padding(6.dp),
         )
 
-        // 底部弧形导航：上滑展开 设置/添加，下滑收起；聚焦时随镜头淡出并停用触摸
+        // 底部弧形导航：上滑展开 筛选/添加/设置，下滑收起；聚焦时随镜头淡出并停用触摸
         ArcNavBar(
             onAdd = onAdd,
             onOpenSettings = onOpenSettings,
+            filterIcon = when (filterMode) {
+                1 -> R.drawable.ic_filter_unfinished
+                2 -> R.drawable.ic_filter_finished
+                else -> R.drawable.ic_filter_all
+            },
+            onFilterCycle = { filterMode = (filterMode + 1) % 3 },
             moonImage = moonImage,
             timeMs = timeMs,
             dim = zoom.value,
@@ -919,6 +949,8 @@ fun OrbitScreen(
 private fun ArcNavBar(
     onAdd: () -> Unit,
     onOpenSettings: () -> Unit,
+    filterIcon: Int,
+    onFilterCycle: () -> Unit,
     moonImage: ImageBitmap?,
     timeMs: Long,
     dim: Float,
@@ -1033,6 +1065,7 @@ private fun ArcNavBar(
                 horizontalArrangement = Arrangement.spacedBy(44.dp),
             ) {
                 listOf(
+                    Triple("筛选", filterIcon, onFilterCycle),
                     Triple("添加", R.drawable.ic_star_add, onAdd),
                     Triple("设置", R.drawable.ic_setting_btn, onOpenSettings),
                 ).forEach { (label, iconRes, onClick) ->
@@ -1303,6 +1336,7 @@ private fun DrawScope.drawTask(
     selected: OrbitTask?,
     images: Map<Long, ImageBitmap>,
     tilt: Tilt = Tilt(),
+    showName: Boolean = true,
     dimmed: Boolean,
     fill: Float,
     delFill: Float,
@@ -1446,15 +1480,15 @@ private fun DrawScope.drawTask(
             )
         }
     }
-    // 液态玻璃质感：球面暗角 + 边缘亮环（高光斑移除——聚焦放大后会显形为一个圆叠在行星上）
+    // 液态玻璃质感：球面暗角 + 边缘亮环（随行星整体透明度淡出——聚焦时其他行星彻底隐藏）
     drawCircle(
         Brush.radialGradient(
-            listOf(Color(0x00000000), Color(0x59000000)),
+            listOf(Color(0x00000000), Color(0x59000000).copy(alpha = 0x59 / 255f * alpha)),
             center = Offset(p.x, p.y), radius = r,
         ),
         r, Offset(p.x, p.y),
     )
-    drawCircle(Color(0x59FFFFFF), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
+    drawCircle(Color(0x59FFFFFF).copy(alpha = 0x59 / 255f * alpha), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
 
     // 删除长按裂纹：polie 碎裂贴图固定贴合行星，随进度以行星中心为圆心向外扩散揭示（裂纹蔓延感）
     if (sel && delFill > 0f && r > 10f && crackTex != null) {
@@ -1504,16 +1538,18 @@ private fun DrawScope.drawTask(
         }
     }
 
-    // 名字注记（衬线 + 投影）
-    val nameColor = if (done)
-        hsla(t.hue, 0.45f, 0.8f, 0.95f * maxOf(dim, 0.5f))
-    else
-        Color(0xFFC4CCDE).copy(alpha = 0.85f * maxOf(dim, 0.5f))
-    val nameScale = minOf(g.zoom, 2.6f)
-    namePaint.textSize = 11.5f * g.s * nameScale
-    namePaint.setShadowLayer(5f * g.s * nameScale, 0f, 1f * g.s * nameScale, 0xE604060C.toInt())
-    val labelFade = (1f - z * 0.9f).coerceIn(0.12f, 1f)
-    drawTextNc(t.name, p.x, p.y + r + 14f * g.s * nameScale, namePaint, nameColor.copy(alpha = nameColor.alpha * labelFade * se).toArgb())
+    // 名字注记（衬线 + 投影）；可经设置隐藏，聚焦淡出时同步消隐
+    if (showName) {
+        val nameColor = if (done)
+            hsla(t.hue, 0.45f, 0.8f, 0.95f * dim)
+        else
+            Color(0xFFC4CCDE).copy(alpha = 0.85f * dim)
+        val nameScale = minOf(g.zoom, 2.6f)
+        namePaint.textSize = 11.5f * g.s * nameScale
+        namePaint.setShadowLayer(5f * g.s * nameScale, 0f, 1f * g.s * nameScale, 0xE604060C.toInt())
+        val labelFade = (1f - z * 0.9f).coerceIn(0.12f, 1f)
+        drawTextNc(t.name, p.x, p.y + r + 14f * g.s * nameScale, namePaint, nameColor.copy(alpha = nameColor.alpha * labelFade * se).toArgb())
+    }
 }
 
 private fun DrawScope.drawProceduralPlanet(

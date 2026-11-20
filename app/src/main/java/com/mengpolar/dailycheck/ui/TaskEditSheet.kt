@@ -252,12 +252,6 @@ fun TaskEditSheet(
                             if (hasPlanetImage) "[ 移除图像 ]" else "[ 载入图像 ]",
                             onClick = if (hasPlanetImage) onRemoveImage else onPickImage,
                         )
-                        if (hasPlanetImage) {
-                            Text(
-                                "· 已装载",
-                                color = TermBlue, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                            )
-                        }
                     }
                 }
 

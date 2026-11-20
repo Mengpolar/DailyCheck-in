@@ -88,6 +88,15 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     private val refreshTick = MutableStateFlow(System.currentTimeMillis())
     private val detailTaskId = MutableStateFlow<Long?>(null)
 
+    // 界面设置：主页行星下方任务名称的显示（持久化）
+    private val prefs = application.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE)
+    private val _showPlanetNames = MutableStateFlow(prefs.getBoolean("show_planet_names", true))
+    val showPlanetNames: StateFlow<Boolean> = _showPlanetNames
+    fun setShowPlanetNames(enabled: Boolean) {
+        _showPlanetNames.value = enabled
+        prefs.edit().putBoolean("show_planet_names", enabled).apply()
+    }
+
     init {
         // 定期刷新：跨周期边界时自动更新行星状态
         viewModelScope.launch {
