@@ -89,9 +89,9 @@ private val ShellMetalHi = Color(0xFFA6AEB8) // 金属高光
 private val ShellInk = Color(0xFF2C3037) // 丝印刻字（暗）
 private val ScreenBg = Color(0xFF101214) // 屏幕底（灰黑）
 private val ScreenGrid = Color(0xFF1D2023) // 屏内网格
-private val TermBlue = Color(0xFF55CFFF) // 天蓝主色（亮）
-private val TermBlueBright = Color(0xFFC6F1FF) // 高亮/光标
-private val TermBlueDim = Color(0xFF4AA6C4) // 次级文字
+private val TermBlue = Color(0xFF6BE3FF) // 天蓝主色（高亮）
+private val TermBlueBright = Color(0xFFE6FAFF) // 高亮/光标
+private val TermBlueDim = Color(0xFF58BCD9) // 次级文字
 private val TermRed = Color(0xFFFF7A6B) // 荧光警示红
 private val TermInk = Color(0xFFF0F8FC) // 输入内容近白
 
@@ -543,7 +543,7 @@ private fun DeviceShell(
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    "编号 0421",
+                    "编号 v" + com.mengpolar.dailycheck.update.UpdateManager.currentVersion(),
                     color = ShellInk.copy(alpha = 0.75f),
                     fontSize = 9.sp,
                     letterSpacing = 2.sp,
@@ -608,17 +608,18 @@ private fun DeviceScreen(
                 while (x < size.width) {
                     drawLine(ScreenGrid, Offset(x, 0f), Offset(x, size.height), 1f); x += step
                 }
-                // 常驻扫描线（缓扫）
-                val band = 34.dp.toPx()
-                val sy = scanY * size.height
+                // 常驻扫描光波：整屏始终被柔和波覆盖，亮心从上到下扫过
+                val ph = (scanY * 2f - 0.5f) * size.height
                 drawRect(
                     Brush.verticalGradient(
-                        listOf(Color.Transparent, TermBlueBright.copy(alpha = 0.06f), Color.Transparent),
-                        startY = 0f,
-                        endY = band * 2,
+                        0f to Color.Transparent,
+                        0.42f to TermBlue.copy(alpha = 0.10f),
+                        0.5f to TermBlueBright.copy(alpha = 0.15f),
+                        0.58f to TermBlue.copy(alpha = 0.10f),
+                        1f to Color.Transparent,
+                        startY = ph - size.height,
+                        endY = ph + size.height,
                     ),
-                    topLeft = Offset(0f, sy - band),
-                    size = Size(size.width, band * 2),
                 )
                 // 暗角
                 drawRect(
