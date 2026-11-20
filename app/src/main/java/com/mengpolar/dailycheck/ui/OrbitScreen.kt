@@ -6,6 +6,8 @@ import android.graphics.BitmapFactory
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.Log
@@ -221,6 +223,13 @@ private val planetPaintGray = Paint().apply {
     colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f); postConcat(dimMatrix) })
 }
 
+// 碎裂贴图画笔：暗色本体 + 浅色错位衬底（任意行星表面可见）
+private val crackPaintDark = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
+private val crackPaintLight = Paint().apply {
+    isAntiAlias = true; isFilterBitmap = true
+    colorFilter = PorterDuffColorFilter(0xFFF2E7D8.toInt(), PorterDuff.Mode.SRC_IN)
+}
+
 @Composable
 fun OrbitScreen(
     state: OrbitUiState,
@@ -331,6 +340,12 @@ fun OrbitScreen(
     val moonImage = remember {
         runCatching {
             BitmapFactory.decodeResource(context.resources, R.drawable.moon)?.let { processMoon(it) }?.asImageBitmap()
+        }.getOrNull()
+    }
+    // 碎裂贴图（polie.png 白底裂纹 → 黑色裂纹透明贴图）：长按删除时叠加在行星上
+    val crackImage = remember {
+        runCatching {
+            BitmapFactory.decodeResource(context.resources, R.drawable.polie)?.let { processCrackTex(it) }?.asImageBitmap()
         }.getOrNull()
     }
     // 星光贴图：star.svg 转白的位图，点击特效动态染色/缩放/旋转
@@ -642,6 +657,7 @@ fun OrbitScreen(
                             .toFloat().coerceIn(0f, 550f) / 550f,
                         delFill = if (selected?.id == t.id)
                             (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
+                        crackTex = crackImage,
                         fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
                             (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                     )
@@ -1035,6 +1051,10 @@ private fun ArcNavBar(
     }
 }
 
+/** polie.png 已是透明底裂纹贴图：仅保证 ARGB_8888 软件位图（可 getPixels/安全绘制） */
+private fun processCrackTex(src: Bitmap): Bitmap =
+    src.copy(Bitmap.Config.ARGB_8888, false)
+
 /** 月图处理：moon2 为居中正方形透图——圆内（半径 = 边长/2）强制不透明，圆外透明 */
 private fun processMoon(src: Bitmap): Bitmap {
     val w = src.width; val h = src.height
@@ -1267,6 +1287,7 @@ private fun DrawScope.drawTask(
     fill: Float,
     delFill: Float,
     spawn: Float,
+    crackTex: ImageBitmap?,
 ) {
     val p = planetPos(g, t)
     if (timeMs % 2000L < 20L) {
@@ -1388,49 +1409,46 @@ private fun DrawScope.drawTask(
     )
     drawCircle(Color(0x59FFFFFF), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
 
-    // 删除长按裂纹：进度越深裂纹越密、越宽、越清晰（暗阴影 + 亮裂缝芯，任意行星表面可见）
-    if (sel && delFill > 0f && r > 10f) {
+    // 删除长按裂纹：polie 碎裂贴图叠加行星，进度越深越清晰、越外扩；暗色本体 + 浅色错位衬底
+    if (sel && delFill > 0f && r > 10f && crackTex != null) {
         val rnd = Random(t.id)
-        val lineW = (1.0f + 2.0f * delFill) * g.s
-        val crackAlpha = (0.30f + 0.60f * delFill).coerceIn(0f, 0.95f)
-        val darkA = Color(0xFF05050A).copy(alpha = crackAlpha)
-        val lightA = Color(0xFFF2E7D8).copy(alpha = crackAlpha * 0.85f)
-        val mainCracks = 7
-        val twoPi = 2f * PI.toFloat()
-        for (c in 0 until mainCracks) {
-            var ang = c * (twoPi / mainCracks) + (rnd.nextFloat() - 0.5f) * 0.5f
-            var rad = r * (0.10f + rnd.nextFloat() * 0.08f)
-            var px = p.x + cos(ang) * rad
-            var py = p.y + sin(ang) * rad
-            val startTh = (c.toFloat() / mainCracks) * 0.5f
-            val step = (r * 0.86f) / 5f
-            for (j in 0 until 5) {
-                ang += (rnd.nextFloat() - 0.5f) * 0.6f
-                rad = (rad + step).coerceAtMost(r * 0.94f)
-                val nx = p.x + cos(ang) * rad
-                val ny = p.y + sin(ang) * rad
-                // 分段随进度延展：越接近 100% 裂纹越长、越接近边缘
-                val segTh = startTh + j * 0.12f
-                val f = ((delFill - segTh) / 0.12f).coerceIn(0f, 1f)
-                if (f > 0f) {
-                    val ex = px + (nx - px) * f
-                    val ey = py + (ny - py) * f
-                    drawLine(darkA, Offset(px, py), Offset(ex, ey), strokeWidth = lineW * 2.1f * (1f - j * 0.1f))
-                    drawLine(lightA, Offset(px, py), Offset(ex, ey), strokeWidth = lineW * (1f - j * 0.1f))
-                    // 过半后从主裂缝长出分支碎裂
-                    if (delFill > 0.55f && j == 2) {
-                        val bang = ang + (if (c % 2 == 0) 0.7f else -0.7f) + (rnd.nextFloat() - 0.5f) * 0.3f
-                        val brad = (rad + r * 0.16f * (delFill - 0.55f) / 0.45f).coerceAtMost(r * 0.95f)
-                        val bx = p.x + cos(bang) * brad
-                        val by = p.y + sin(bang) * brad
-                        drawLine(darkA, Offset(ex, ey), Offset(bx, by), strokeWidth = lineW * 1.4f)
-                        drawLine(lightA, Offset(ex, ey), Offset(bx, by), strokeWidth = lineW * 0.7f)
-                    }
-                }
-                px = nx
-                py = ny
-            }
+        val rot = rnd.nextFloat() * 360f
+        val reveal = ((delFill - 0.06f) / 0.94f).coerceIn(0f, 1f)
+        val alpha = ((0.30f + 0.70f * reveal) * delFill).coerceIn(0f, 1f)
+        val side = r * 2f * (0.80f + 0.30f * reveal)
+        val dstL = p.x - side / 2f
+        val dstT = p.y - side / 2f
+        val nc = drawContext.canvas.nativeCanvas
+        nc.save()
+        nc.rotate(rot, p.x, p.y)
+        // 浅色衬底：轻微错位，形成受光裂缝缘
+        crackPaintLight.alpha = (alpha * 255f * 0.55f).toInt()
+        nc.drawBitmap(
+            crackTex.asAndroidBitmap(), null,
+            RectF(dstL + 1.6f * g.s, dstT + 1.6f * g.s, dstL + 1.6f * g.s + side, dstT + 1.6f * g.s + side),
+            crackPaintLight,
+        )
+        // 暗色主体
+        crackPaintDark.alpha = (alpha * 255f).toInt()
+        nc.drawBitmap(
+            crackTex.asAndroidBitmap(), null,
+            RectF(dstL, dstT, dstL + side, dstT + side),
+            crackPaintDark,
+        )
+        // 高进度：再叠一层旋转贴图，碎裂更密
+        if (delFill > 0.6f) {
+            val a2 = ((delFill - 0.6f) / 0.4f).coerceIn(0f, 1f)
+            crackPaintDark.alpha = (alpha * 0.85f * a2 * 255f).toInt()
+            nc.save()
+            nc.rotate(137f, p.x, p.y)
+            nc.drawBitmap(
+                crackTex.asAndroidBitmap(), null,
+                RectF(dstL, dstT, dstL + side * 0.92f, dstT + side * 0.92f),
+                crackPaintDark,
+            )
+            nc.restore()
         }
+        nc.restore()
     }
 
     // 名字注记（衬线 + 投影）
