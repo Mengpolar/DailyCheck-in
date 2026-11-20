@@ -264,7 +264,8 @@ fun OrbitScreen(
     val displayItems = remember(visibleTasks) {
         visibleTasks.mapIndexed { i, t -> t.copy(ring = i) }
     }
-    val selected = state.items.firstOrNull { it.id == selectedId }
+    // 选中任务按显示集取（筛选重排环序后，镜头/命中须与绘制一致）
+    val selected = displayItems.firstOrNull { it.id == selectedId }
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
     if (selected != null) recentSelected = selected
@@ -582,7 +583,7 @@ fun OrbitScreen(
                         val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size, tiltAnim.value)
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
-                        val selNow = state.items.firstOrNull { it.id == selectedId } ?: recentSelected
+                        val selNow = displayItems.firstOrNull { it.id == selectedId } ?: recentSelected
                         var camScale = 1f
                         var kx = g0.cx; var ky = g0.cy
                         if (selNow != null) {
@@ -683,12 +684,14 @@ fun OrbitScreen(
 
                 // 星系层：轨道半径已含相机缩放（轨道线弱化，仅作存在暗示）
                 drawOrbitLayer(g)
+                // 退焦动画期间（zoom 未归零）沿用最近选中继续暗化其他行星，实现逐渐恢复
+                val dimRef = selected ?: recentSelected.takeIf { zoom.value > 0.05f }
                 displayItems.sortedBy { planetPos(g, it).nearness }.forEach { t ->
                     drawTask(
                         g, t, timeMs, z, selected, planetImages,
                         tilt = deviceTilt,
                         showName = showPlanetNames,
-                        dimmed = selected != null && selected.id != t.id,
+                        dimmed = dimRef != null && dimRef.id != t.id,
                         spawn = ((timeMs - (spawnedAt[t.id] ?: 0L)).coerceAtLeast(0L))
                             .toFloat().coerceIn(0f, 550f) / 550f,
                         delFill = if (selected?.id == t.id)
