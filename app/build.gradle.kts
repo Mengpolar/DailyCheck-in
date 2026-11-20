@@ -17,8 +17,8 @@ android {
         applicationId = "com.mengpolar.dailycheck"
         minSdk = 26
         targetSdk = 34
-        versionName = ciVersion ?: "0.0.31"
-        versionCode = ciVersionCode ?: 31
+        versionName = ciVersion ?: "0.0.32"
+        versionCode = ciVersionCode ?: 32
     }
 
     signingConfigs {

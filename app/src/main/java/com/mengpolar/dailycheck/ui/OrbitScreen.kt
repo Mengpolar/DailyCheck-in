@@ -1409,46 +1409,52 @@ private fun DrawScope.drawTask(
     )
     drawCircle(Color(0x59FFFFFF), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
 
-    // 删除长按裂纹：polie 碎裂贴图叠加行星，进度越深越清晰、越外扩；暗色本体 + 浅色错位衬底
+    // 删除长按裂纹：polie 碎裂贴图固定贴合行星，随进度以行星中心为圆心向外扩散揭示（裂纹蔓延感）
     if (sel && delFill > 0f && r > 10f && crackTex != null) {
         val rnd = Random(t.id)
         val rot = rnd.nextFloat() * 360f
         val reveal = ((delFill - 0.06f) / 0.94f).coerceIn(0f, 1f)
-        val alpha = ((0.30f + 0.70f * reveal) * delFill).coerceIn(0f, 1f)
-        val side = r * 2f * (0.80f + 0.30f * reveal)
+        val alpha = ((0.45f + 0.55f * reveal) * delFill).coerceIn(0f, 1f)
+        val side = r * 2f
         val dstL = p.x - side / 2f
         val dstT = p.y - side / 2f
         val nc = drawContext.canvas.nativeCanvas
-        nc.save()
-        nc.rotate(rot, p.x, p.y)
-        // 浅色衬底：轻微错位，形成受光裂缝缘
-        crackPaintLight.alpha = (alpha * 255f * 0.55f).toInt()
-        nc.drawBitmap(
-            crackTex.asAndroidBitmap(), null,
-            RectF(dstL + 1.6f * g.s, dstT + 1.6f * g.s, dstL + 1.6f * g.s + side, dstT + 1.6f * g.s + side),
-            crackPaintLight,
-        )
-        // 暗色主体
-        crackPaintDark.alpha = (alpha * 255f).toInt()
-        nc.drawBitmap(
-            crackTex.asAndroidBitmap(), null,
-            RectF(dstL, dstT, dstL + side, dstT + side),
-            crackPaintDark,
-        )
-        // 高进度：再叠一层旋转贴图，碎裂更密
-        if (delFill > 0.6f) {
-            val a2 = ((delFill - 0.6f) / 0.4f).coerceIn(0f, 1f)
-            crackPaintDark.alpha = (alpha * 0.85f * a2 * 255f).toInt()
+        val revealR = reveal * r * 1.45f
+        val revealCircle = Path().apply {
+            addOval(Rect(p.x - revealR, p.y - revealR, p.x + revealR, p.y + revealR))
+        }
+        clipPath(revealCircle) {
             nc.save()
-            nc.rotate(137f, p.x, p.y)
+            nc.rotate(rot, p.x, p.y)
+            // 浅色衬底：轻微错位，形成受光裂缝缘
+            crackPaintLight.alpha = (alpha * 255f * 0.55f).toInt()
             nc.drawBitmap(
                 crackTex.asAndroidBitmap(), null,
-                RectF(dstL, dstT, dstL + side * 0.92f, dstT + side * 0.92f),
+                RectF(dstL + 1.6f * g.s, dstT + 1.6f * g.s, dstL + 1.6f * g.s + side, dstT + 1.6f * g.s + side),
+                crackPaintLight,
+            )
+            // 暗色主体
+            crackPaintDark.alpha = (alpha * 255f).toInt()
+            nc.drawBitmap(
+                crackTex.asAndroidBitmap(), null,
+                RectF(dstL, dstT, dstL + side, dstT + side),
                 crackPaintDark,
             )
+            // 高进度：再叠一层旋转贴图，碎裂更密
+            if (delFill > 0.6f) {
+                val a2 = ((delFill - 0.6f) / 0.4f).coerceIn(0f, 1f)
+                crackPaintDark.alpha = (alpha * 0.85f * a2 * 255f).toInt()
+                nc.save()
+                nc.rotate(137f, p.x, p.y)
+                nc.drawBitmap(
+                    crackTex.asAndroidBitmap(), null,
+                    RectF(dstL, dstT, dstL + side * 0.92f, dstT + side * 0.92f),
+                    crackPaintDark,
+                )
+                nc.restore()
+            }
             nc.restore()
         }
-        nc.restore()
     }
 
     // 名字注记（衬线 + 投影）
