@@ -81,19 +81,19 @@ import androidx.compose.ui.unit.sp
 import com.mengpolar.dailycheck.data.TaskUi
 import kotlin.random.Random
 
-// ============ 设备色板：陈旧金属外壳 + CRT 屏幕天蓝荧光 ============
-private val ShellTop = Color(0xFF3E463C) // 壳面受光
-private val ShellBottom = Color(0xFF2C322B) // 壳面背光
-private val ShellMetal = Color(0xFF565E52) // 铆钉金属
-private val ShellMetalHi = Color(0xFF8A9280) // 金属高光
-private val ShellInk = Color(0xFF171B16) // 丝印刻字（暗）
-private val ScreenBg = Color(0xFF081418) // 屏幕底
-private val ScreenGrid = Color(0xFF14262E) // 屏内网格
-private val TermBlue = Color(0xFF6ECFE8) // 天蓝主色
-private val TermBlueBright = Color(0xFFA5E6F5) // 高亮/光标
-private val TermBlueDim = Color(0xFF4E93AC) // 次级文字
+// ============ 设备色板：现代银色金属外壳 + 灰黑 CRT 屏幕天蓝荧光 ============
+private val ShellTop = Color(0xFFC6CBD2) // 壳面受光（银）
+private val ShellBottom = Color(0xFF9BA2AB) // 壳面背光（银）
+private val ShellMetal = Color(0xFF6E767F) // 铆钉钢材
+private val ShellMetalHi = Color(0xFFA6AEB8) // 金属高光
+private val ShellInk = Color(0xFF2C3037) // 丝印刻字（暗）
+private val ScreenBg = Color(0xFF101214) // 屏幕底（灰黑）
+private val ScreenGrid = Color(0xFF1D2023) // 屏内网格
+private val TermBlue = Color(0xFF55CFFF) // 天蓝主色（亮）
+private val TermBlueBright = Color(0xFFC6F1FF) // 高亮/光标
+private val TermBlueDim = Color(0xFF4AA6C4) // 次级文字
 private val TermRed = Color(0xFFFF7A6B) // 荧光警示红
-private val TermInk = Color(0xFFE8F2F5) // 输入内容近白
+private val TermInk = Color(0xFFF0F8FC) // 输入内容近白
 
 // ============ 设备姿态（陀螺仪）→ 金属反光偏移 ============
 private data class Tilt(val x: Float = 0f, val y: Float = 0f)
@@ -431,36 +431,47 @@ private fun DeviceShell(
                     Offset(0f, y), Offset(size.width, y), 1f,
                 )
             }
-            // 边缘磨损暗角
+            // 边缘磨损暗角（银色机身、收敛的旧感）
             drawRect(
                 Brush.verticalGradient(
-                    listOf(Color.Black.copy(alpha = 0.22f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.28f)),
+                    listOf(Color.Black.copy(alpha = 0.16f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.22f)),
                 ),
             )
             drawRect(
                 Brush.horizontalGradient(
-                    listOf(Color.Black.copy(alpha = 0.14f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.14f)),
+                    listOf(Color.Black.copy(alpha = 0.10f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.10f)),
                 ),
             )
-            // 陀螺仪反光：随姿态漂移的软光斑 + 竖向高光带（仿佛固定光源照在金属上）
+            // 陀螺仪反光：随姿态漂移的强光斑 + 双高光带（固定光源照在银色金属上）
             val cx = size.width * (0.5f - tilt.y * 0.32f)
             val cy = size.height * (0.40f - tilt.x * 0.28f)
             drawRect(
                 Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = 0.10f), Color.Transparent),
+                    listOf(Color.White.copy(alpha = 0.24f), Color.Transparent),
                     center = Offset(cx, cy),
-                    radius = size.width * 0.8f,
+                    radius = size.width * 0.72f,
                 ),
             )
-            val band = size.width * 0.18f
+            val band = size.width * 0.24f
             drawRect(
                 Brush.horizontalGradient(
-                    listOf(Color.Transparent, Color.White.copy(alpha = 0.07f), Color.Transparent),
+                    listOf(Color.Transparent, Color.White.copy(alpha = 0.16f), Color.Transparent),
                     startX = cx - band,
                     endX = cx + band,
                 ),
                 topLeft = Offset(cx - band, 0f),
                 size = Size(band * 2, size.height),
+            )
+            // 窄锐利次级高光条（镜面反光的亮线）
+            val nb = size.width * 0.045f
+            drawRect(
+                Brush.horizontalGradient(
+                    listOf(Color.Transparent, Color.White.copy(alpha = 0.30f), Color.Transparent),
+                    startX = cx + band * 0.55f - nb,
+                    endX = cx + band * 0.55f + nb,
+                ),
+                topLeft = Offset(cx + band * 0.55f - nb, 0f),
+                size = Size(nb * 2, size.height),
             )
             // 四角铆钉
             val pad = 12.dp.toPx()
@@ -486,7 +497,7 @@ private fun DeviceShell(
             val gy = 10.dp.toPx()
             val gh = 5.dp.toPx()
             drawRoundRect(
-                Color(0xFF12140F).copy(alpha = 0.85f),
+                Color(0xFF1B1E22).copy(alpha = 0.85f),
                 topLeft = Offset(gx, gy),
                 size = Size(gw, gh),
                 cornerRadius = CornerRadius(gh / 2),
@@ -498,8 +509,8 @@ private fun DeviceShell(
             // 掉漆斑与划痕
             chips.forEach { (fx, fy, s) ->
                 val p = Offset(fx * size.width, fy * size.height)
-                drawCircle(Color(0xFF14161A).copy(alpha = 0.7f), s, p)
-                drawCircle(Color.White.copy(alpha = 0.06f), s * 0.65f, Offset(p.x - 1f, p.y - 1.5f))
+                drawCircle(Color(0xFF14161A).copy(alpha = 0.55f), s, p)
+                drawCircle(Color.White.copy(alpha = 0.10f), s * 0.65f, Offset(p.x - 1f, p.y - 1.5f))
             }
             scratches.forEach { (fx, fy, len) ->
                 val y = fy * size.height
@@ -578,7 +589,7 @@ private fun DeviceScreen(
     )
     Box(
         modifier
-            .border(1.dp, Color(0xFF222E2A), RoundedCornerShape(10.dp)),
+            .border(1.dp, Color(0xFF2A2E32), RoundedCornerShape(10.dp)),
     ) {
         Canvas(Modifier.matchParentSize()) {
             val radius = 10.dp.toPx()
@@ -746,7 +757,7 @@ private fun SegmentedToggle(
             .fillMaxWidth()
             .height(42.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF0C1A22))
+            .background(Color(0xFF171A1E))
             .border(1.dp, TermBlueDim.copy(alpha = 0.4f), RoundedCornerShape(8.dp)),
     ) {
         val cell = maxWidth / options.size
