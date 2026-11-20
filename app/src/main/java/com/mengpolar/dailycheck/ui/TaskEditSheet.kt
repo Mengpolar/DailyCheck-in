@@ -406,14 +406,6 @@ private fun DeviceShell(
         val r = Random(8)
         List(120) { Triple(r.nextInt(3), r.nextFloat(), r.nextFloat()) }
     }
-    // 掉漆斑：分布在左右边带与顶部铭牌带（屏幕会盖住中部）
-    val chips = remember {
-        val r = Random(421)
-        List(8) { i ->
-            val x = if (i % 2 == 0) 0.006f + r.nextFloat() * 0.03f else 0.964f + r.nextFloat() * 0.03f
-            Triple(x, r.nextFloat(), 1.5f + r.nextFloat() * 3f)
-        } + List(3) { Triple(r.nextFloat(), 0.015f + r.nextFloat() * 0.02f, 1.5f + r.nextFloat() * 3f) }
-    }
     val scratches = remember {
         val r = Random(97)
         List(3) { Triple(r.nextFloat(), 0.03f + r.nextFloat() * 0.02f, 30f + r.nextFloat() * 50f) }
@@ -489,12 +481,7 @@ private fun DeviceShell(
                 Color.White.copy(alpha = 0.20f),
                 Offset(gx + 8, gy + gh + 1f), Offset(gx + gw - 8, gy + gh + 1f), 1f,
             )
-            // 掉漆斑与划痕
-            chips.forEach { (fx, fy, s) ->
-                val p = Offset(fx * size.width, fy * size.height)
-                drawCircle(Color(0xFF14161A).copy(alpha = 0.55f), s, p)
-                drawCircle(Color.White.copy(alpha = 0.10f), s * 0.65f, Offset(p.x - 1f, p.y - 1.5f))
-            }
+            // 划痕
             scratches.forEach { (fx, fy, len) ->
                 val y = fy * size.height
                 drawLine(
