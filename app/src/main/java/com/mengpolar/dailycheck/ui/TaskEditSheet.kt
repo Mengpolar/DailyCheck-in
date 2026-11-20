@@ -61,6 +61,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -88,7 +89,7 @@ private val ShellMetal = Color(0xFF6E767F) // 铆钉钢材
 private val ShellMetalHi = Color(0xFFA6AEB8) // 金属高光
 private val ShellInk = Color(0xFF2C3037) // 丝印刻字（暗）
 private val ScreenBg = Color(0xFF101214) // 屏幕底（灰黑）
-private val ScreenGrid = Color(0xFF1D2023) // 屏内网格
+private val ScreenGrid = Color(0xFF262B30) // 屏内网格（明显）
 private val TermBlue = Color(0xFF6BE3FF) // 天蓝主色（高亮）
 private val TermBlueBright = Color(0xFFE6FAFF) // 高亮/光标
 private val TermBlueDim = Color(0xFF58BCD9) // 次级文字
@@ -120,15 +121,15 @@ private fun rememberTilt(): State<Tilt> {
                     val nx = (pitch / 30f).coerceIn(-1f, 1f)
                     val ny = (roll / 30f).coerceIn(-1f, 1f)
                     tilt.value = Tilt(
-                        x = cur.x + (nx - cur.x) * 0.12f,
-                        y = cur.y + (ny - cur.y) * 0.12f,
+                        x = cur.x + (nx - cur.x) * 0.4f,
+                        y = cur.y + (ny - cur.y) * 0.4f,
                     )
                 }
             }
 
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
-        sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+        sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_GAME)
         onDispose { sm.unregisterListener(listener) }
     }
     return tilt
@@ -447,7 +448,7 @@ private fun DeviceShell(
             val cy = size.height * (0.40f - tilt.x * 0.28f)
             drawRect(
                 Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = 0.24f), Color.Transparent),
+                    listOf(Color.White.copy(alpha = 0.34f), Color.Transparent),
                     center = Offset(cx, cy),
                     radius = size.width * 0.72f,
                 ),
@@ -455,7 +456,7 @@ private fun DeviceShell(
             val band = size.width * 0.24f
             drawRect(
                 Brush.horizontalGradient(
-                    listOf(Color.Transparent, Color.White.copy(alpha = 0.16f), Color.Transparent),
+                    listOf(Color.Transparent, Color.White.copy(alpha = 0.24f), Color.Transparent),
                     startX = cx - band,
                     endX = cx + band,
                 ),
@@ -466,31 +467,13 @@ private fun DeviceShell(
             val nb = size.width * 0.045f
             drawRect(
                 Brush.horizontalGradient(
-                    listOf(Color.Transparent, Color.White.copy(alpha = 0.30f), Color.Transparent),
+                    listOf(Color.Transparent, Color.White.copy(alpha = 0.42f), Color.Transparent),
                     startX = cx + band * 0.55f - nb,
                     endX = cx + band * 0.55f + nb,
                 ),
                 topLeft = Offset(cx + band * 0.55f - nb, 0f),
                 size = Size(nb * 2, size.height),
             )
-            // 四角铆钉
-            val pad = 12.dp.toPx()
-            val rr = 3.dp.toPx()
-            listOf(
-                Offset(pad, pad), Offset(size.width - pad, pad),
-                Offset(pad, size.height - pad), Offset(size.width - pad, size.height - pad),
-            ).forEach { c ->
-                drawCircle(Color.Black.copy(alpha = 0.45f), rr + 1.5f, Offset(c.x + 1.2f, c.y + 1.8f))
-                drawCircle(
-                    Brush.radialGradient(
-                        listOf(ShellMetalHi, ShellMetal),
-                        center = Offset(c.x - rr * 0.3f, c.y - rr * 0.35f),
-                        radius = rr * 1.7f,
-                    ),
-                    rr, c,
-                )
-                drawCircle(Color.Black.copy(alpha = 0.25f), rr + 2.5f, c, style = Stroke(1f))
-            }
             // 顶部提手凹槽（兼作下滑提示）
             val gw = 120.dp.toPx()
             val gx = size.width / 2f - gw / 2f
@@ -515,9 +498,37 @@ private fun DeviceShell(
             scratches.forEach { (fx, fy, len) ->
                 val y = fy * size.height
                 drawLine(
-                    Color.White.copy(alpha = 0.05f),
+                    Color.Black.copy(alpha = 0.08f),
                     Offset(fx * size.width, y), Offset(fx * size.width + len, y + len * 0.35f), 1f,
                 )
+            }
+            // 打穿屏幕区域：外壳在此留洞，星空透过半透明屏幕可见
+            //（比屏幕区略小 1dp，避免外壳与屏幕间露缝；边界须与布局同步：
+            //  屏幕区 上 67dp=26+22+5+1+1+12，左右 14dp，下 14dp，圆角 10dp）
+            drawRoundRect(
+                Color.Black, // 颜色无效，Clear 模式擦除为透明
+                topLeft = Offset(15.dp.toPx(), 68.dp.toPx()),
+                size = Size(size.width - 30.dp.toPx(), size.height - 15.dp.toPx() - 68.dp.toPx()),
+                cornerRadius = CornerRadius(9.dp.toPx()),
+                blendMode = BlendMode.Clear,
+            )
+            // 四角铆钉（画在打穿之后，避免被擦除）
+            val pad = 12.dp.toPx()
+            val rr = 3.dp.toPx()
+            listOf(
+                Offset(pad, pad), Offset(size.width - pad, pad),
+                Offset(pad, size.height - pad), Offset(size.width - pad, size.height - pad),
+            ).forEach { c ->
+                drawCircle(Color.Black.copy(alpha = 0.45f), rr + 1.5f, Offset(c.x + 1.2f, c.y + 1.8f))
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(ShellMetalHi, ShellMetal),
+                        center = Offset(c.x - rr * 0.3f, c.y - rr * 0.35f),
+                        radius = rr * 1.7f,
+                    ),
+                    rr, c,
+                )
+                drawCircle(Color.Black.copy(alpha = 0.25f), rr + 2.5f, c, style = Stroke(1f))
             }
         }
 
@@ -526,10 +537,11 @@ private fun DeviceShell(
                 .fillMaxSize()
                 .padding(top = 26.dp, bottom = 14.dp),
         ) {
-            // 铭牌：丝印刻字 + 编号
+            // 铭牌：丝印刻字 + 编号（高度固定 22dp，外壳打穿区域的边界依赖此布局）
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .height(22.dp)
                     .padding(horizontal = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -597,7 +609,7 @@ private fun DeviceScreen(
                 addRoundRect(RoundRect(0f, 0f, size.width, size.height, CornerRadius(radius)))
             }
             clipPath(clip) {
-                drawRect(ScreenBg)
+                drawRect(ScreenBg.copy(alpha = 0.87f)) // 轻微透明：可透视舱外星空
                 // 细网格
                 val step = 26.dp.toPx()
                 var y = 0f
@@ -613,9 +625,9 @@ private fun DeviceScreen(
                 drawRect(
                     Brush.verticalGradient(
                         0f to Color.Transparent,
-                        0.42f to TermBlue.copy(alpha = 0.10f),
-                        0.5f to TermBlueBright.copy(alpha = 0.15f),
-                        0.58f to TermBlue.copy(alpha = 0.10f),
+                        0.42f to TermBlue.copy(alpha = 0.22f),
+                        0.5f to TermBlueBright.copy(alpha = 0.32f),
+                        0.58f to TermBlue.copy(alpha = 0.22f),
                         1f to Color.Transparent,
                         startY = ph - size.height,
                         endY = ph + size.height,
