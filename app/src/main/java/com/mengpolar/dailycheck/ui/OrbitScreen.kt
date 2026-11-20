@@ -100,6 +100,7 @@ import com.mengpolar.dailycheck.data.weekdayLabel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -639,6 +640,8 @@ fun OrbitScreen(
                         dimmed = selected != null && selected.id != t.id,
                         spawn = ((timeMs - (spawnedAt[t.id] ?: 0L)).coerceAtLeast(0L))
                             .toFloat().coerceIn(0f, 550f) / 550f,
+                        delFill = if (selected?.id == t.id)
+                            (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                         fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
                             (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                     )
@@ -1262,6 +1265,7 @@ private fun DrawScope.drawTask(
     images: Map<Long, ImageBitmap>,
     dimmed: Boolean,
     fill: Float,
+    delFill: Float,
     spawn: Float,
 ) {
     val p = planetPos(g, t)
@@ -1383,6 +1387,51 @@ private fun DrawScope.drawTask(
         r, Offset(p.x, p.y),
     )
     drawCircle(Color(0x59FFFFFF), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
+
+    // 删除长按裂纹：进度越深裂纹越密、越宽、越清晰（暗阴影 + 亮裂缝芯，任意行星表面可见）
+    if (sel && delFill > 0f && r > 10f) {
+        val rnd = Random(t.id)
+        val lineW = (1.0f + 2.0f * delFill) * g.s
+        val crackAlpha = (0.30f + 0.60f * delFill).coerceIn(0f, 0.95f)
+        val darkA = Color(0xFF05050A).copy(alpha = crackAlpha)
+        val lightA = Color(0xFFF2E7D8).copy(alpha = crackAlpha * 0.85f)
+        val mainCracks = 7
+        val twoPi = 2f * PI.toFloat()
+        for (c in 0 until mainCracks) {
+            var ang = c * (twoPi / mainCracks) + (rnd.nextFloat() - 0.5f) * 0.5f
+            var rad = r * (0.10f + rnd.nextFloat() * 0.08f)
+            var px = p.x + cos(ang) * rad
+            var py = p.y + sin(ang) * rad
+            val startTh = (c.toFloat() / mainCracks) * 0.5f
+            val step = (r * 0.86f) / 5f
+            for (j in 0 until 5) {
+                ang += (rnd.nextFloat() - 0.5f) * 0.6f
+                rad = (rad + step).coerceAtMost(r * 0.94f)
+                val nx = p.x + cos(ang) * rad
+                val ny = p.y + sin(ang) * rad
+                // 分段随进度延展：越接近 100% 裂纹越长、越接近边缘
+                val segTh = startTh + j * 0.12f
+                val f = ((delFill - segTh) / 0.12f).coerceIn(0f, 1f)
+                if (f > 0f) {
+                    val ex = px + (nx - px) * f
+                    val ey = py + (ny - py) * f
+                    drawLine(darkA, Offset(px, py), Offset(ex, ey), strokeWidth = lineW * 2.1f * (1f - j * 0.1f))
+                    drawLine(lightA, Offset(px, py), Offset(ex, ey), strokeWidth = lineW * (1f - j * 0.1f))
+                    // 过半后从主裂缝长出分支碎裂
+                    if (delFill > 0.55f && j == 2) {
+                        val bang = ang + (if (c % 2 == 0) 0.7f else -0.7f) + (rnd.nextFloat() - 0.5f) * 0.3f
+                        val brad = (rad + r * 0.16f * (delFill - 0.55f) / 0.45f).coerceAtMost(r * 0.95f)
+                        val bx = p.x + cos(bang) * brad
+                        val by = p.y + sin(bang) * brad
+                        drawLine(darkA, Offset(ex, ey), Offset(bx, by), strokeWidth = lineW * 1.4f)
+                        drawLine(lightA, Offset(ex, ey), Offset(bx, by), strokeWidth = lineW * 0.7f)
+                    }
+                }
+                px = nx
+                py = ny
+            }
+        }
+    }
 
     // 名字注记（衬线 + 投影）
     val nameColor = if (done)
