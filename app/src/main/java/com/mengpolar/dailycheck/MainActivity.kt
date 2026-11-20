@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -19,11 +20,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -96,7 +99,14 @@ private fun App() {
 
     if (showSettings) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-        ModalBottomSheet(onDismissRequest = { showSettings = false }, sheetState = sheetState) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false },
+            sheetState = sheetState,
+            containerColor = Color.Transparent,
+            tonalElevation = 0.dp,
+            dragHandle = null,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        ) {
             SettingsScreen(
                 vm = updateVm,
                 onBack = { showSettings = false },
@@ -106,7 +116,14 @@ private fun App() {
 
     detailState?.let { ds ->
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-        ModalBottomSheet(onDismissRequest = { taskVm.openDetail(null) }, sheetState = sheetState) {
+        ModalBottomSheet(
+            onDismissRequest = { taskVm.openDetail(null) },
+            sheetState = sheetState,
+            containerColor = Color.Transparent,
+            tonalElevation = 0.dp,
+            dragHandle = null,
+            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        ) {
             TaskDetailScreen(
                 state = ds,
                 onDeleteRecord = { taskVm.deleteRecord(it.id) },

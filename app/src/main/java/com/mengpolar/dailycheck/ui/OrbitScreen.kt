@@ -124,7 +124,7 @@ private val CardBorder = Color(0x24D8DEEE)
 private const val CHECK_HOLD_S = 3f
 
 /** 聚焦页按钮默认底色（灰黑）与长按填充的淡金 */
-private val BtnBg = Color(0xE6202630)
+private val BtnBg = Color(0xB3101214)
 private val HoldGold = Color(0xFFDFBE7E)
 
 /** 几何：以 dp 为单位（Canvas 内按屏幕密度整体缩放） */
@@ -713,9 +713,9 @@ fun OrbitScreen(
             val done = t.state == PlanetState.DONE
             val remainingMs = (t.periodEndMs - System.currentTimeMillis()).coerceAtLeast(0L)
             val remainColor = when (t.state) {
-                PlanetState.LATE -> LateColor
-                PlanetState.NEAR -> GoldColor
-                else -> Color(0xFFB9C2D4)
+                PlanetState.LATE -> TermRed
+                PlanetState.NEAR -> TermBlueBright
+                else -> TermInk
             }
 
             // 顶部信息卡：任务名称 / 周期 / 倒计时 / 已完成周期数；聚焦时从上往下出现，退焦反向
@@ -728,9 +728,9 @@ fun OrbitScreen(
                         alpha = pa
                         translationY = -(1f - pa) * 90f
                     }
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xC010141A))
-                    .border(1.dp, Color(0x24FFFFFF), RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xB3101214))
+                    .border(1.dp, TermBlueDim.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                     // 仅占位命中路径挡住透传（空 handler 不消费事件，子删除钮才能收到长按）
                     .pointerInput(Unit) { }
                     .padding(horizontal = 22.dp, vertical = 16.dp),
@@ -739,22 +739,22 @@ fun OrbitScreen(
                     Column(Modifier.weight(1f)) {
                         Text(
                             t.name,
-                            color = InkColor, fontSize = 21.sp, fontFamily = FontFamily.Serif,
+                            color = TermInk, fontSize = 20.sp, fontFamily = FontFamily.Monospace,
                             letterSpacing = 2.sp, maxLines = 1,
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
-                            color = DimColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                            color = TermBlueDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
                             if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
-                            color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp,
+                            color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                         )
                         if (t.note.isNotBlank()) {
                             Spacer(Modifier.height(4.dp))
-                            Text(t.note, color = DimColor, fontSize = 12.sp, maxLines = 2)
+                            Text(t.note, color = TermBlueDim, fontSize = 12.sp, maxLines = 2, fontFamily = FontFamily.Monospace)
                         }
                     }
                     // 长按 3 秒删除任务：红色填充（同打卡按钮），完成后轨道行星消散，无撤销
@@ -765,8 +765,8 @@ fun OrbitScreen(
                             .padding(start = 10.dp)
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(Color(0x26FFFFFF))
-                            .border(1.dp, Color(0x30FFFFFF), CircleShape)
+                            .background(TermRed.copy(alpha = 0.12f))
+                            .border(1.dp, TermRed.copy(alpha = 0.6f), CircleShape)
                             .pointerInput(t.id) {
                                 detectTapGestures(
                                     onPress = {
@@ -782,7 +782,7 @@ fun OrbitScreen(
                                 val circle = Path().apply { addOval(Rect(0f, 0f, size.width, size.height)) }
                                 clipPath(circle) {
                                     drawRect(
-                                        Color(0xFFCF6A5B),
+                                        TermRed,
                                         topLeft = Offset.Zero,
                                         size = Size(size.width * delFill, size.height),
                                     )
@@ -816,23 +816,23 @@ fun OrbitScreen(
                     Box(
                         Modifier
                             .weight(0.8f).height(52.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(BtnBg)
-                            .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(14.dp))
+                            .border(1.dp, TermBlueDim.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                             .clickable { onEdit(t.id) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("编辑", color = InkColor, fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
+                        Text("编辑", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
                     }
                     Box(
                         Modifier
                             .weight(1.4f).height(52.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(BtnBg)
                             .border(
                                 1.dp,
-                                if (fillFrac > 0f) Color(0x66D8B36A) else Color(0x2EFFFFFF),
-                                RoundedCornerShape(14.dp),
+                                if (fillFrac > 0f) TermBlue.copy(alpha = 0.6f) else TermBlueDim.copy(alpha = 0.5f),
+                                RoundedCornerShape(10.dp),
                             )
                             .pointerInput(t.id, done) {
                                 if (!done) detectTapGestures(
@@ -845,10 +845,10 @@ fun OrbitScreen(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        // 长按填充层：从左往右逐渐铺满淡金色
+                        // 长按填充层：从左往右逐渐铺满天蓝
                         Canvas(Modifier.matchParentSize()) {
                             if (fillFrac > 0f) {
-                                drawRect(HoldGold, size = Size(size.width * fillFrac, size.height))
+                                drawRect(TermBlue, size = Size(size.width * fillFrac, size.height))
                             }
                         }
                         Text(
@@ -857,20 +857,20 @@ fun OrbitScreen(
                                 fillFrac > 0f -> "${(fillFrac * 100).toInt()}%"
                                 else -> "长按打卡"
                             },
-                            color = if (done) GoldDim else lerp(InkColor, Color(0xFF241A08), fillFrac),
-                            fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 2.sp,
+                            color = if (done) TermBlueBright else lerp(TermInk, Color(0xFF06222B), fillFrac),
+                            fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp,
                         )
                     }
                     Box(
                         Modifier
                             .weight(0.8f).height(52.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(10.dp))
                             .background(BtnBg)
-                            .border(1.dp, Color(0x2EFFFFFF), RoundedCornerShape(14.dp))
+                            .border(1.dp, TermBlueDim.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                             .clickable { onOpenRecords(t.id) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("历史", color = InkColor, fontSize = 14.sp, fontFamily = FontFamily.Serif, letterSpacing = 1.sp)
+                        Text("历史", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
                     }
                 }
             }

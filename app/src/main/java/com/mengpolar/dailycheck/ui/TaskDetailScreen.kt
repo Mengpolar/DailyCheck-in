@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -31,10 +32,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -51,6 +50,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -70,44 +71,58 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** 历史（打卡记录）弹窗内容：只展示打卡记录，支持堆叠滚动与左滑删除 */
+/** 历史（打卡记录）弹窗：「航行日志单元」设备面板，支持堆叠滚动与左滑删除 */
 @Composable
 fun TaskDetailScreen(
     state: DetailUiState,
     onDeleteRecord: (CheckRecord) -> Unit,
 ) {
-    val listState = rememberLazyListState()
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxHeight(),
-        contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 48.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (state.records.isEmpty()) {
-            item(key = "empty") {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 80.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "暂无打卡记录",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
+    DeviceShell(modifier = Modifier.fillMaxSize(), nameplate = "航行日志单元") {
+        val listState = rememberLazyListState()
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxHeight(),
+            contentPadding = PaddingValues(4.dp, 4.dp, 4.dp, 24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item(key = "title") {
+                Text(
+                    "历史记录_",
+                    color = TermBlueBright, fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+            if (state.records.isEmpty()) {
+                item(key = "empty") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 80.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "暂无打卡记录",
+                            style = TextStyle(
+                                color = TermBlueDim,
+                                fontSize = 13.sp,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 2.sp,
+                            ),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            } else {
+                itemsIndexed(state.records, key = { _, r -> "r${r.id}" }) { i, record ->
+                    SwipeDeletableRecord(
+                        record = record,
+                        onDelete = onDeleteRecord,
+                        modifier = Modifier
+                            .animateItem()
+                            .stackCard(listState, i),
                     )
                 }
-            }
-        } else {
-            itemsIndexed(state.records, key = { _, r -> "r${r.id}" }) { i, record ->
-                SwipeDeletableRecord(
-                    record = record,
-                    onDelete = onDeleteRecord,
-                    modifier = Modifier
-                        .animateItem()
-                        .stackCard(listState, i),
-                )
             }
         }
     }
@@ -140,8 +155,6 @@ private data class StarBit(
     val phase: Float,
 )
 
-private val DeleteRed = Color(0xFFCF6A5B)
-
 /**
  * 左滑删除：向左拖动露出右侧红色删除按钮（卡片右侧圆角随滑动渐变为方角，与按钮无缝衔接）；
  * 点击删除后卡片与按钮一起化作随机星光向上飘散、逐渐消散
@@ -155,7 +168,7 @@ private fun SwipeDeletableRecord(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val revealWidth = with(density) { 92.dp.toPx() }
-    val corner = 12.dp
+    val corner = 10.dp
     val offset = remember(record.id) { Animatable(0f) }
     val dissolve = remember(record.id) { Animatable(0f) }
     var dragJob by remember { mutableStateOf<Job?>(null) }
@@ -209,7 +222,7 @@ private fun SwipeDeletableRecord(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(with(density) { 92.dp })
-                .padding(vertical = 4.dp)
+                .padding(vertical = 2.dp)
                 .graphicsLayer { alpha = cardAlpha }
                 .clip(
                     RoundedCornerShape(
@@ -219,7 +232,7 @@ private fun SwipeDeletableRecord(
                         bottomStart = 0.dp,
                     ),
                 )
-                .background(DeleteRed)
+                .background(TermRed)
                 .clickable(enabled = !fading && offset.value < -revealWidth * 0.35f) {
                     if (dissolve.isRunning) return@clickable
                     bits = List(18) {
@@ -240,9 +253,15 @@ private fun SwipeDeletableRecord(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text("删除", color = Color.White, fontSize = 13.sp)
+            Text(
+                "删除",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 2.sp,
+            )
         }
-        // 前景：记录卡片（左滑；右侧圆角随滑动渐变为方角，与删除按钮无缝衔接）
+        // 前景：日志条目（左滑；右侧圆角随滑动渐变为方角，与删除按钮无缝衔接）
         RecordRow(
             record,
             shape = RoundedCornerShape(
@@ -275,28 +294,39 @@ private fun SwipeDeletableRecord(
 private fun RecordRow(
     record: CheckRecord,
     modifier: Modifier = Modifier,
-    shape: RoundedCornerShape = RoundedCornerShape(12.dp),
+    shape: RoundedCornerShape = RoundedCornerShape(10.dp),
 ) {
     val date = LocalDate.ofEpochDay(record.epochDay)
     val time = LocalDateTime.ofInstant(Instant.ofEpochMilli(record.createdAtEpochMs), ZoneId.systemDefault())
-    Card(shape = shape, modifier = modifier) {
-        Row(
-            Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Box(
+        modifier
+            .clip(shape)
+            .background(Color(0xFF161A1E)) // 不透明：遮住底层红色删除按钮
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 Icons.Rounded.Check,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
+                tint = TermBlue,
+                modifier = Modifier.size(16.dp),
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(formatDate(date), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    formatDate(date),
+                    color = TermInk,
+                    fontSize = 14.sp,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp,
+                )
+                Spacer(Modifier.height(2.dp))
                 Text(
                     "打卡时间 %02d:%02d".format(time.hour, time.minute),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = TermBlueDim,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp,
                 )
             }
         }
