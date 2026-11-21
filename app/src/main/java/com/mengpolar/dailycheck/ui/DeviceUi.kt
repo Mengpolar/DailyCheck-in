@@ -98,20 +98,22 @@ internal fun rememberTilt(): State<Tilt> {
         val sensor = sm?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
         if (sm == null || sensor == null) return@DisposableEffect onDispose { }
         val rm = FloatArray(9)
-        val angles = FloatArray(3)
         val listener = object : SensorEventListener {
             override fun onSensorChanged(e: SensorEvent) {
                 runCatching {
                     SensorManager.getRotationMatrixFromVector(rm, e.values)
-                    SensorManager.getOrientation(rm, angles)
-                    val pitch = Math.toDegrees(angles[1].toDouble()).toFloat() // 前后倾
-                    val roll = Math.toDegrees(angles[2].toDouble()).toFloat() // 左右倾
+                    // 世界固定光源（左上前方 L=(-0.5,-0.5,0.75)）投影到设备屏幕坐标。
+                    // 不用 pitch/roll 欧拉角：竖屏持机时 pitch 饱和 ±90°、roll 贴万向锁死区，
+                    // 会导致反光/行星质感在真机上不动；矩阵投影在任意姿态下均线性响应。
+                    // 设备轴在世界坐标中的方向 = R 的列（rm 行主序：列0=(rm[0],rm[3],rm[6])…）
+                    val d0 = -0.5f * rm[0] - 0.5f * rm[3] + 0.75f * rm[6] // 光在设备 X（屏幕右）分量
+                    val d1 = -0.5f * rm[1] - 0.5f * rm[4] + 0.75f * rm[7] // 光在设备 Y（屏幕上）分量
+                    val nx = (d0 / 1.05f).coerceIn(-1f, 1f)
+                    val ny = (d1 / 1.05f).coerceIn(-1f, 1f)
                     val cur = tilt.value
-                    val nx = (pitch / 30f).coerceIn(-1f, 1f)
-                    val ny = (roll / 30f).coerceIn(-1f, 1f)
                     tilt.value = Tilt(
-                        x = cur.x + (nx - cur.x) * 0.4f,
-                        y = cur.y + (ny - cur.y) * 0.4f,
+                        x = cur.x + (ny - cur.x) * 0.4f,
+                        y = cur.y + (nx - cur.y) * 0.4f,
                     )
                 }
             }
@@ -169,8 +171,8 @@ internal fun DeviceShell(
                     listOf(Color.Black.copy(alpha = 0.10f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.10f)),
                 ),
             )
-            // 陀螺仪反光：随姿态漂移的强光斑 + 双高光带（固定光源照在银色金属上）
-            val cx = size.width * (0.5f - tilt.y * 0.32f)
+            // 陀螺仪反光：随姿态漂移的强光斑 + 双高光带（世界固定光源照在银色金属上，光源侧高亮）
+            val cx = size.width * (0.5f + tilt.y * 0.32f)
             val cy = size.height * (0.40f - tilt.x * 0.28f)
             drawRect(
                 Brush.radialGradient(

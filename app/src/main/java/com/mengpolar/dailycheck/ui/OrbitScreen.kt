@@ -1472,11 +1472,11 @@ private fun DrawScope.drawTask(
                 ),
                 r, Offset(p.x, p.y),
             )
-            // 高光斑：随姿态漂移
+            // 高光斑：随姿态漂移（光源侧高亮）
             drawCircle(
                 Brush.radialGradient(
                     listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
-                    center = Offset(p.x - tilt.y * r * 0.45f, p.y - r * 0.42f - tilt.x * r * 0.15f),
+                    center = Offset(p.x + tilt.y * r * 0.45f, p.y - r * 0.42f - tilt.x * r * 0.15f),
                     radius = r * 0.85f,
                 ),
                 r, Offset(p.x, p.y),
