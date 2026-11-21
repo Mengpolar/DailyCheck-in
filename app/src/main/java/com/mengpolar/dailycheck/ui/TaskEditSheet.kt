@@ -123,7 +123,7 @@ fun TaskEditSheet(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (initial == null) "新建任务" else "编辑任务",
+                        if (initial == null) "新建任务" else "改造任务",
                         color = TermBlueBright, fontSize = 15.sp,
                         fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
                     )

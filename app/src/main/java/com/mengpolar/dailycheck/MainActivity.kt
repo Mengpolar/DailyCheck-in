@@ -93,8 +93,10 @@ private fun App() {
         onOpenSettings = { showSettings = true },
         onOpenRecords = { taskVm.openDetail(it) },
         onCheck = checkIn,
+        onRetroScan = { taskVm.retroScan(it) },
         onEdit = { id -> openEdit(id) },
         onDeleteTask = { taskVm.deleteTask(it) },
+        onReconstruct = { taskVm.reconstruct(it) },
     )
 
     if (showSettings) {

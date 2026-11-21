@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import com.mengpolar.dailycheck.data.OrbitTask
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.random.Random
 
 // ── 星图配色（行星态描边与逾期红，其余界面色见 DeviceUi） ──
 internal val LateColor = Color(0xFFCF6A5B)
@@ -92,6 +93,8 @@ internal fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 internal class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
 internal fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
+    // 暗星不在轨道上：直接返回其停靠位
+    if (t.darkStar) return darkStarPos(g, t.id, t.darkIndex)
     val a = planetAngle(t.frac)
     // 布局过渡帧可能存在半径表短暂滞后，越界时回退到最外圈，避免绘制崩溃
     val R = g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
@@ -100,6 +103,32 @@ internal fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
     val nearness = (1f - cos(a)) / 2f
     val pr = 18f * g.planetScale * g.s * g.zoom * (0.85f + 0.35f * nearness)
     return PlanetPos(x, y, nearness, pr)
+}
+
+/**
+ * 暗星停靠位：无轨道，散布在轨道盘外的空白带。
+ * 锚点全部取盘外（四角 / 顶缘 / 两侧偏上），按 id 做确定性伪随机散布——
+ * 每次刷新位置稳定不漂移；底部预留月球导航区不可停靠。
+ */
+internal fun darkStarPos(g: Geo, id: Long, index: Int): PlanetPos {
+    val s = g.s
+    val anchors = listOf(
+        0.10f to 0.10f, 0.90f to 0.10f,   // 上部两角
+        0.50f to 0.085f,                   // 顶缘中央
+        0.075f to 0.30f, 0.925f to 0.30f,  // 两侧偏上
+        0.075f to 0.70f, 0.925f to 0.70f,  // 两侧偏下
+    )
+    val rnd = Random(id * 31 + 7)
+    val (fx, fy) = anchors[Math.abs((id + index * 3L).toInt()) % anchors.size]
+    val jx = (rnd.nextFloat() - 0.5f) * 0.06f
+    val jy = (rnd.nextFloat() - 0.5f) * 0.05f
+    // 同槽多颗：沿固定步长错开，避免完全重叠
+    val dx = index * 16f * s
+    val dy = (index % 3) * 13f * s
+    val x = ((fx + jx) * g.w + dx).coerceIn(30f * s, g.w - 30f * s)
+    val y = ((fy + jy) * g.h + dy).coerceIn(44f * s, g.h - 160f * s)
+    val r = 11f * g.planetScale * s * g.zoom * (0.92f + 0.08f * sin(id.toFloat() + index))
+    return PlanetPos(x, y, 0.5f, r)
 }
 
 internal fun hsla(hue: Int, sat: Float, light: Float, alpha: Float) =

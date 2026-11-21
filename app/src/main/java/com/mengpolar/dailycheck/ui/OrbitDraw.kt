@@ -4,8 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.compose.ui.geometry.Offset
@@ -16,6 +14,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -30,10 +29,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.mengpolar.dailycheck.data.OrbitTask
 import com.mengpolar.dailycheck.data.PlanetState
+import com.mengpolar.dailycheck.data.growthStageOf
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.random.Random
 
 // ── 共享画笔（避免每帧分配） ──
 private val namePaint = Paint().apply {
@@ -51,18 +50,6 @@ private val planetPaintGray = Paint().apply {
     isAntiAlias = true; isFilterBitmap = true
     colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f); postConcat(dimMatrix) })
 }
-
-// 碎裂贴图画笔：暗色本体 + 浅色错位衬底（任意行星表面可见）
-private val crackPaintDark = Paint().apply { isAntiAlias = true; isFilterBitmap = true }
-private val crackPaintLight = Paint().apply {
-    isAntiAlias = true; isFilterBitmap = true
-    colorFilter = PorterDuffColorFilter(0xFFF2E7D8.toInt(), PorterDuff.Mode.SRC_IN)
-}
-
-
-/** polie.png 已是透明底裂纹贴图：仅保证 ARGB_8888 软件位图（可 getPixels/安全绘制） */
-internal fun processCrackTex(src: Bitmap): Bitmap =
-    src.copy(Bitmap.Config.ARGB_8888, false)
 
 /** 月图处理：moon2 为居中正方形透图——圆内（半径 = 边长/2）强制不透明，圆外透明 */
 internal fun processMoon(src: Bitmap): Bitmap {
@@ -298,13 +285,15 @@ internal fun DrawScope.drawTask(
     fill: Float,
     delFill: Float,
     spawn: Float,
-    crackTex: ImageBitmap?,
 ) {
     val p = planetPos(g, t)
     val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat()
     // 新行星登场：0.55→1.0 放大浮现（先快后慢）
     val se = spawn * spawn * (3f - 2f * spawn)
-    val r = p.r * (0.55f + 0.45f * se)
+    // 成长阶段：累计扫描次数驱动，逐级叠加特效（见 Models.GROWTH_*）
+    val stage = growthStageOf(t.recordCount)
+    // 吞噬长按预览：行星被引力拉扯——轻微收缩并变暗（碎裂贴图效果已移除）
+    val r = p.r * (0.55f + 0.45f * se) * (1f - 0.16f * delFill)
     val dim = if (dimmed) 1f - z else 1f // 聚焦时其他行星随缩放完全淡出（同月球）
     val depthA = 0.72f + 0.28f * p.nearness
     val sel = selected?.id == t.id
@@ -313,6 +302,12 @@ internal fun DrawScope.drawTask(
     val R = g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
     val ovalTopLeft = Offset(g.cx - R, g.cy - R * g.q)
     val ovalSize = Size(R * 2f, R * g.q * 2f)
+    // 行星本体透明度（提前计算：成长特效层同样需要随状态/聚焦/登场衰减）
+    val alpha = ((depthA * dim * when (t.state) {
+        PlanetState.NEAR -> 0.55f + 0.28f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
+        PlanetState.LATE -> 0.62f
+        else -> 1f
+    } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se * (1f - 0.30f * delFill)
 
     // 彗尾（打卡后随时间淡出，拖在行星后方）：柔光底层 + 渐细渐隐主弧
     if (done && t.tail > 0f) {
@@ -336,10 +331,46 @@ internal fun DrawScope.drawTask(
         }
     }
 
-    // 聚焦态轻微左右翻转（提前计算：状态环/完成光晕/行星本体/玻璃轮廓全部随翻转压缩）
+    // 聚焦态轻微左右翻转（提前计算：状态环/成长特效/行星本体/玻璃轮廓全部随翻转压缩）
     val yaw = (tilt.y * 1.2f).coerceIn(-0.9f, 0.9f)
     val halfW = if (sel) r * cos(yaw) else r
     val flipScale = halfW / r.coerceAtLeast(1f)
+
+    // 成长特效 · S5 炽星（≥75 次扫描）：自体辉光——行星背后的柔和光晕（加色）
+    if (stage >= 5) {
+        val bloom = 0.15f + 0.06f * sin(timeMs / 1100f + t.id.toFloat())
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(
+                        hsla(t.hue, 0.65f, 0.72f, bloom * alpha),
+                        Color.Transparent,
+                    ),
+                    center = Offset(p.x, p.y), radius = r * 2.3f,
+                ),
+                r * 2.3f, Offset(p.x, p.y), blendMode = BlendMode.Plus,
+            )
+        }
+    }
+    // 成长特效 · S4 环星（≥50 次扫描）：倾斜行星环（背面半环先画在行星身后）
+    if (stage >= 4 && r > 8f) {
+        rotate(degrees = -14f, pivot = Offset(p.x, p.y)) {
+            scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+                drawArc(
+                    Brush.horizontalGradient(
+                        listOf(
+                            hsla(t.hue, 0.40f, 0.72f, 0.34f * alpha),
+                            hsla((t.hue + 40) % 360, 0.50f, 0.66f, 0.34f * alpha),
+                        )
+                    ),
+                    180f, 180f, false,
+                    topLeft = Offset(p.x - r * 1.75f, p.y - r * 1.75f * 0.34f),
+                    size = Size(r * 3.5f, r * 1.75f * 0.34f * 2f),
+                    style = Stroke(r * 0.26f),
+                )
+            }
+        }
+    }
 
     // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
     scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
@@ -367,12 +398,6 @@ internal fun DrawScope.drawTask(
     }
 
     // 行星本体
-    val alpha = ((depthA * dim * when (t.state) {
-        PlanetState.NEAR -> 0.55f + 0.28f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
-        PlanetState.LATE -> 0.62f
-        else -> 1f
-    } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
-
     val bmp = images[t.id]
     if (bmp != null) {
         val paint = if (done) planetPaintNormal else planetPaintGray
@@ -411,6 +436,56 @@ internal fun DrawScope.drawTask(
                     drawProceduralPlanet(p.x, p.y, r, t.hue, true, alpha)
                 }
             }
+        }
+    }
+    // 成长特效 · S2 岩星（≥15 次扫描）：缓慢漂移的地貌纬度带（低透明度叠加在行星表面）
+    if (stage >= 2 && r > 8f) {
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+            clipRect(left = p.x - r, top = p.y - r, right = p.x + r, bottom = p.y + r) {
+                for (i in 0 until 3) {
+                    val yc = p.y + sin(timeMs / 2400f + t.id * 0.9f + i * 2.1f) * r * 0.42f
+                    val bw = r * 0.16f
+                    drawRect(
+                        Brush.horizontalGradient(
+                            listOf(
+                                hsla(t.hue, 0.30f, 0.14f, 0f),
+                                hsla(t.hue, 0.30f, 0.14f, 0.16f * alpha),
+                                hsla(t.hue, 0.30f, 0.14f, 0f),
+                            )
+                        ),
+                        topLeft = Offset(p.x - r, yc - bw / 2f),
+                        size = Size(r * 2f, bw),
+                    )
+                }
+            }
+        }
+    }
+    // 成长特效 · S1 微星（≥7 次扫描）：大气缘光——贴着行星边缘呼吸的细环
+    if (stage >= 1) {
+        val breathe = 0.75f + 0.25f * sin(timeMs / 1200f + t.ring * 1.7f)
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+            drawCircle(
+                hsla(t.hue, 0.55f, 0.70f, 0.30f * alpha * breathe),
+                r + 1.8f * g.s, Offset(p.x, p.y), style = Stroke(1.6f * g.s),
+            )
+        }
+    }
+    // 成长特效 · S3 虹星（≥30 次扫描）：极光辉环——外圈脉冲光带（加色）
+    if (stage >= 3) {
+        val pulse = 0.5f + 0.5f * sin(timeMs / 900f + t.ring * 2.3f)
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(
+                        Color.Transparent,
+                        hsla((t.hue + 50) % 360, 0.70f, 0.65f, (0.20f + 0.14f * pulse) * alpha),
+                        Color.Transparent,
+                    ),
+                    center = Offset(p.x, p.y), radius = r * 1.55f,
+                ),
+                r * 1.55f, Offset(p.x, p.y), style = Stroke(r * 0.30f),
+                blendMode = BlendMode.Plus,
+            )
         }
     }
     // 聚焦态陀螺仪质感：重力投影驱动——暗面移向背光侧、高光斑移向抬起的边缘（与面板反光同源）
@@ -452,51 +527,52 @@ internal fun DrawScope.drawTask(
         drawCircle(Color(0x59FFFFFF).copy(alpha = 0x59 / 255f * alpha), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
     }
 
-    // 删除长按裂纹：polie 碎裂贴图固定贴合行星，随进度以行星中心为圆心向外扩散揭示（裂纹蔓延感）
-    if (sel && delFill > 0f && r > 10f && crackTex != null) {
-        val rnd = Random(t.id)
-        val rot = rnd.nextFloat() * 360f
-        val reveal = ((delFill - 0.06f) / 0.94f).coerceIn(0f, 1f)
-        val alpha = ((0.45f + 0.55f * reveal) * delFill).coerceIn(0f, 1f)
-        val side = r * 2f
-        val dstL = p.x - side / 2f
-        val dstT = p.y - side / 2f
-        val nc = drawContext.canvas.nativeCanvas
-        val revealR = reveal * r * 1.45f
-        val revealCircle = Path().apply {
-            addOval(Rect(p.x - revealR, p.y - revealR, p.x + revealR, p.y + revealR))
-        }
-        clipPath(revealCircle) {
-            nc.save()
-            nc.rotate(rot, p.x, p.y)
-            // 浅色衬底：轻微错位，形成受光裂缝缘
-            crackPaintLight.alpha = (alpha * 255f * 0.55f).toInt()
-            nc.drawBitmap(
-                crackTex.asAndroidBitmap(), null,
-                RectF(dstL + 1.6f * g.s, dstT + 1.6f * g.s, dstL + 1.6f * g.s + side, dstT + 1.6f * g.s + side),
-                crackPaintLight,
-            )
-            // 暗色主体
-            crackPaintDark.alpha = (alpha * 255f).toInt()
-            nc.drawBitmap(
-                crackTex.asAndroidBitmap(), null,
-                RectF(dstL, dstT, dstL + side, dstT + side),
-                crackPaintDark,
-            )
-            // 高进度：再叠一层旋转贴图，碎裂更密
-            if (delFill > 0.6f) {
-                val a2 = ((delFill - 0.6f) / 0.4f).coerceIn(0f, 1f)
-                crackPaintDark.alpha = (alpha * 0.85f * a2 * 255f).toInt()
-                nc.save()
-                nc.rotate(137f, p.x, p.y)
-                nc.drawBitmap(
-                    crackTex.asAndroidBitmap(), null,
-                    RectF(dstL, dstT, dstL + side * 0.92f, dstT + side * 0.92f),
-                    crackPaintDark,
+    // 成长特效 · S4 环星：行星环正面半环（画在行星身前，遮住行星下缘）
+    if (stage >= 4 && r > 8f) {
+        rotate(degrees = -14f, pivot = Offset(p.x, p.y)) {
+            scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+                drawArc(
+                    Brush.horizontalGradient(
+                        listOf(
+                            hsla(t.hue, 0.40f, 0.74f, 0.50f * alpha),
+                            hsla((t.hue + 40) % 360, 0.50f, 0.68f, 0.50f * alpha),
+                        )
+                    ),
+                    0f, 180f, false,
+                    topLeft = Offset(p.x - r * 1.75f, p.y - r * 1.75f * 0.34f),
+                    size = Size(r * 3.5f, r * 1.75f * 0.34f * 2f),
+                    style = Stroke(r * 0.26f),
                 )
-                nc.restore()
             }
-            nc.restore()
+        }
+    }
+    // 成长特效 · S6 耀星（≥100 次扫描）：旋转日冕耀斑 + 两粒环绕光点（加色）
+    if (stage >= 6) {
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+            rotate(degrees = (timeMs * 0.012f) % 360f, pivot = Offset(p.x, p.y)) {
+                for (i in 0 until 4) {
+                    rotate(degrees = i * 90f, pivot = Offset(p.x, p.y)) {
+                        val flareLen = r * (1.7f + 0.5f * sin(timeMs / 700f + i * 1.9f))
+                        drawLine(
+                            hsla((t.hue + 30) % 360, 0.60f, 0.80f, 0.35f * alpha),
+                            Offset(p.x, p.y - r * 1.05f),
+                            Offset(p.x, p.y - flareLen),
+                            strokeWidth = 1.6f * g.s,
+                            blendMode = BlendMode.Plus,
+                        )
+                    }
+                }
+            }
+            val oa = timeMs * 0.0011f
+            for (k in 0..1) {
+                val ang = oa + k * Math.PI.toFloat()
+                drawCircle(
+                    Color.White.copy(alpha = 0.8f * alpha),
+                    1.4f * g.s,
+                    Offset(p.x + sin(ang) * r * 1.9f, p.y - cos(ang) * r * 1.9f * 0.55f),
+                    blendMode = BlendMode.Plus,
+                )
+            }
         }
     }
 
@@ -535,4 +611,116 @@ internal fun DrawScope.drawProceduralPlanet(
         hsla(hue, 0.5f, 0.72f, 0.3f * alpha),
         r - 0.8f, Offset(x, y), style = Stroke(1.2f),
     )
+}
+
+// ───────────────────────── 暗星（过期一次性任务） ─────────────────────────
+
+/** 暗星：近黑核心 + 冷色视界边缘 + 缓慢旋转的引力虚线圈；重构长按时蓝色充能环扫描点亮 */
+internal fun DrawScope.drawDarkStar(
+    g: Geo,
+    t: OrbitTask,
+    timeMs: Long,
+    selected: OrbitTask?,
+    showName: Boolean,
+    dimmed: Boolean,
+    spawn: Float,
+    fill: Float,
+) {
+    val pp = planetPos(g, t)
+    val p = Offset(pp.x, pp.y)
+    val se = spawn * spawn * (3f - 2f * spawn)
+    val dimmedF = if (dimmed) 0.12f else 1f   // 其他行星聚焦时几乎隐没
+    val sel = selected?.id == t.id
+    val breathe = 0.92f + 0.08f * sin(timeMs / 1000f + t.id.toFloat())
+    val r = pp.r * breathe * se
+    if (r < 2f) return
+
+    // 视界：近黑核心，边缘一圈极暗青灰
+    drawCircle(
+        Brush.radialGradient(
+            listOf(Color(0xFF01030A), Color(0xFF0A0E16), Color(0xFF0A0E16).copy(alpha = 0f)),
+            center = p, radius = r,
+        ),
+        r, p, alpha = dimmedF,
+    )
+    // 吸积辉光（极弱）
+    drawCircle(
+        Brush.radialGradient(
+            listOf(Color(0xFF16203A).copy(alpha = 0.10f * dimmedF), Color.Transparent),
+            center = p, radius = r * 2.1f,
+        ),
+        r * 2.1f, p,
+    )
+    // 事件视界边缘：冷色微光（描边随聚焦缩放增粗）
+    drawCircle(Color(0xFF7FA0C8).copy(alpha = 0.42f * dimmedF), r, p, style = Stroke(maxOf(1.2f * g.s, r * 0.022f)))
+    // 缓慢旋转的引力圈（虚线）
+    rotate(degrees = (timeMs * 0.004f) % 360f, pivot = p) {
+        drawArc(
+            Color(0xFF56688C).copy(alpha = 0.35f * dimmedF),
+            0f, 360f, false,
+            topLeft = Offset(p.x - r * 1.5f, p.y - r * 1.5f),
+            size = Size(r * 3f, r * 3f),
+            style = Stroke(maxOf(1f * g.s, r * 0.018f), pathEffect = PathEffect.dashPathEffect(floatArrayOf(9f, 12f))),
+        )
+    }
+    // 重构长按：蓝色充能环从正上方扫满一圈
+    if (sel && fill > 0f) {
+        drawArc(
+            TermBlueBright.copy(alpha = 0.9f),
+            -90f, 360f * fill.coerceIn(0f, 1f), false,
+            topLeft = Offset(p.x - r * 1.5f, p.y - r * 1.5f),
+            size = Size(r * 3f, r * 3f),
+            style = Stroke(maxOf(2.2f * g.s, r * 0.03f)),
+        )
+    }
+    // 名字注记（暗灰）
+    if (showName) {
+        namePaint.textSize = 11f * g.s * minOf(g.zoom, 2.6f)
+        namePaint.setShadowLayer(4f * g.s, 0f, 1f * g.s, 0xE604060C.toInt())
+        drawTextNc(t.name, p.x, p.y + r + 13f * g.s, namePaint, Color(0xFF6B7686).copy(alpha = 0.85f * dimmedF).toArgb())
+    }
+}
+
+// ───────────────────────── 吞噬残影（删除任务的螺旋坠落） ─────────────────────────
+
+/** 被吞噬中的任务残影：有轨行星螺旋坠入盘心，暗星原地塌缩 */
+internal data class SwallowGhost(
+    val id: Long,
+    val ring: Int,
+    val frac: Float,
+    val hue: Int,
+    val darkStar: Boolean,
+    val darkIndex: Int,
+    val born: Long,
+)
+
+internal fun DrawScope.drawSwallowGhost(g: Geo, ghost: SwallowGhost, timeMs: Long) {
+    val t = ((timeMs - ghost.born) / 850f).coerceIn(0f, 1f)
+    if (t >= 1f) return
+    val p0: Offset
+    val r0: Float
+    if (ghost.darkStar) {
+        val pp = darkStarPos(g, ghost.id, ghost.darkIndex)
+        p0 = Offset(pp.x, pp.y)
+        r0 = pp.r
+    } else {
+        val R = g.radiiPx.getOrElse(ghost.ring) { g.radiiPx.lastOrNull() ?: 0f }
+        // 螺旋：半径线性塌向盘心，角速度随下坠加快
+        val a = planetAngle(ghost.frac) + t * t * 3.8f
+        val R2 = R * (1f - t)
+        p0 = Offset(g.cx + sin(a) * R2, g.cy - cos(a) * R2 * g.q)
+        r0 = 18f * g.planetScale * g.s
+    }
+    val fade = 1f - t
+    val r = (r0 * (1f - 0.85f * t)).coerceAtLeast(1f)
+    // 坠落本体：行星色光点 + 外圈残光
+    drawCircle(hsla(ghost.hue, 0.6f, 0.66f, 0.75f * fade), r, p0)
+    drawCircle(hsla(ghost.hue, 0.5f, 0.80f, 0.40f * fade), r, p0, style = Stroke(1.2f * g.s))
+    // 塌缩虚空：黑洞 + 亮环闪现
+    if (t > 0.5f) {
+        val k = ((t - 0.5f) / 0.5f).coerceIn(0f, 1f)
+        val vr = r0 * (0.5f + 1.3f * k)
+        drawCircle(Color.Black.copy(alpha = 0.85f * (1f - k)), vr, p0)
+        drawCircle(Color.White.copy(alpha = 0.55f * (1f - k)), vr, p0, style = Stroke(1.4f * g.s))
+    }
 }

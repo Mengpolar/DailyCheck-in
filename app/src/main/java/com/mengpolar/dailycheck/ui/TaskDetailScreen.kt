@@ -34,10 +34,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -75,7 +72,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** 历史（打卡记录）弹窗：「航行日志单元」设备面板，支持堆叠滚动与左滑删除 */
+/** 追溯（扫描记录）弹窗：「航行日志单元」设备面板，支持堆叠滚动与左滑删除 */
 @Composable
 fun TaskDetailScreen(
     state: DetailUiState,
@@ -98,7 +95,7 @@ fun TaskDetailScreen(
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "历史记录",
+                        "追溯记录",
                         color = TermBlueBright, fontSize = 15.sp,
                         fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
                     )
@@ -120,7 +117,7 @@ fun TaskDetailScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            "暂无打卡记录",
+                            "暂无追溯记录",
                             style = TextStyle(
                                 color = TermBlueDim,
                                 fontSize = 13.sp,
@@ -323,12 +320,12 @@ private fun RecordRow(
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = null,
-                tint = TermBlue,
-                modifier = Modifier.size(16.dp),
-            )
+            // 自绘对勾（替代 material 图标库）
+            Canvas(Modifier.size(16.dp)) {
+                val stroke = 2.dp.toPx()
+                drawLine(TermBlue, Offset(size.width * 0.18f, size.height * 0.55f), Offset(size.width * 0.42f, size.height * 0.82f), strokeWidth = stroke)
+                drawLine(TermBlue, Offset(size.width * 0.42f, size.height * 0.82f), Offset(size.width * 0.85f, size.height * 0.18f), strokeWidth = stroke)
+            }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -340,7 +337,8 @@ private fun RecordRow(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "打卡时间 %02d:%02d".format(time.hour, time.minute),
+                    if (record.retro) "补 · 回溯补录（未记录时刻）"
+                    else "扫描时间 %02d:%02d".format(time.hour, time.minute),
                     color = TermBlueDim,
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,

@@ -29,13 +29,14 @@ data class Task(
     val onceDays: Int = 0,
 )
 
-/** 一次打卡记录 */
+/** 一次扫描记录（retro = 回溯补录：不写具体时刻，仅锚定所补周期的起点） */
 @Serializable
 data class CheckRecord(
     val id: Long,
     val taskId: Long,
     val epochDay: Long,
     val createdAtEpochMs: Long,
+    val retro: Boolean = false,
 )
 
 /** 本地持久化的完整数据（单 JSON 文件） */
@@ -77,6 +78,21 @@ fun Task.periodFraction(nowMs: Long): Float {
     return ((nowMs - w.startMs).toFloat() / w.durMs).coerceIn(0f, 1f)
 }
 
+/** 上一周期窗口（倒数第二个完整周期）；一次性任务或仍处首个周期时为 null（无追溯意义） */
+fun Task.previousPeriodWindow(nowMs: Long): PeriodWindow? {
+    if (intervalDays <= 0) return null
+    val dur = intervalDays.coerceAtLeast(1) * 86_400_000L
+    val start0 = creationAnchorMs()
+    val k = Math.floorDiv(nowMs - start0, dur)
+    if (k <= 0) return null
+    val start = start0 + (k - 1) * dur
+    return PeriodWindow(start, start + dur, dur)
+}
+
+/** 窗口内是否存在扫描记录（按记录时刻落在 [start, end) 判定） */
+fun Iterable<CheckRecord>.anyInWindow(w: PeriodWindow): Boolean =
+    any { it.createdAtEpochMs >= w.startMs && it.createdAtEpochMs < w.endMs }
+
 /** 当前周期内是否已完成：最近一次打卡时刻落在当前窗口内即算完成 */
 fun Task.isDoneForPeriod(nowMs: Long, lastCheckMs: Long?): Boolean =
     lastCheckMs != null && lastCheckMs >= periodWindow(nowMs).startMs
@@ -101,6 +117,27 @@ fun Task.cycleLabel(): String = when {
     intervalDays.coerceAtLeast(1) == 1 -> "每天"
     else -> "每 ${intervalDays.coerceAtLeast(1)} 天"
 }
+
+// ───────────────────────── 行星成长系统 ─────────────────────────
+// 以累计扫描次数分级，每个阶段在视觉上多一层特效（层层叠加）；
+// 后续开放更多阶段只需在两个表尾部追加。
+
+/** 各阶段累计扫描门槛（第 0 阶段从 0 次起） */
+val GROWTH_THRESHOLDS = intArrayOf(0, 7, 15, 30, 50, 75, 100)
+
+/** 阶段名：星胚→微星→岩星→虹星→环星→炽星→耀星 */
+val GROWTH_NAMES = listOf("星胚", "微星", "岩星", "虹星", "环星", "炽星", "耀星")
+
+/** 累计扫描次数 → 成长阶段序号（0..GROWTH_NAMES.lastIndex） */
+fun growthStageOf(scans: Int): Int {
+    var stage = 0
+    for (i in GROWTH_THRESHOLDS.indices) if (scans >= GROWTH_THRESHOLDS[i]) stage = i
+    return stage
+}
+
+/** 距下一阶段还差的扫描次数；已满阶返回 null */
+fun nextGrowthGap(scans: Int): Int? =
+    GROWTH_THRESHOLDS.firstOrNull { it > scans }?.let { it - scans }
 
 fun formatWindowStart(ms: Long): String {
     val t = Instant.ofEpochMilli(ms).atZone(ZONE)

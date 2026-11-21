@@ -36,9 +36,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -56,6 +53,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -85,9 +83,13 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mengpolar.dailycheck.data.CheckRecord
+import com.mengpolar.dailycheck.data.GROWTH_NAMES
 import com.mengpolar.dailycheck.data.OrbitTask
 import com.mengpolar.dailycheck.data.OrbitUiState
 import com.mengpolar.dailycheck.data.PlanetState
+import com.mengpolar.dailycheck.data.formatWindowStart
+import com.mengpolar.dailycheck.data.growthStageOf
+import com.mengpolar.dailycheck.data.nextGrowthGap
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -106,8 +108,10 @@ fun OrbitScreen(
     onOpenSettings: () -> Unit,
     onOpenRecords: (Long) -> Unit,
     onCheck: (Long) -> CheckRecord,
+    onRetroScan: (Long) -> Unit,
     onEdit: (Long) -> Unit,
     onDeleteTask: (Long) -> Unit,
+    onReconstruct: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     val screenDensity = LocalDensity.current.density
@@ -116,22 +120,31 @@ fun OrbitScreen(
     var arcTarget by remember { mutableFloatStateOf(0f) }
     // 行星筛选：0=全部 1=未完成 2=已完成（月球导航筛选键循环切换）
     var filterMode by remember { mutableIntStateOf(0) }
+    // 暗星（过期一次性任务）：无轨道停靠在盘外空白区，不参与轨道布局与筛选
+    val darkStars = remember(state.items) { state.items.filter { it.darkStar } }
     // 按筛选模式取可见任务；显示环序按可见集合重排（隐藏/恢复时轨道补位让位）
-    val visibleTasks = remember(state.items, filterMode) {
+    val orbitTasks = remember(state.items) { state.items.filterNot { it.darkStar } }
+    val visibleTasks = remember(orbitTasks, filterMode) {
         when (filterMode) {
-            1 -> state.items.filter { it.state != PlanetState.DONE }
-            2 -> state.items.filter { it.state == PlanetState.DONE }
-            else -> state.items
+            1 -> orbitTasks.filter { it.state != PlanetState.DONE }
+            2 -> orbitTasks.filter { it.state == PlanetState.DONE }
+            else -> orbitTasks
         }
     }
     val displayItems = remember(visibleTasks) {
         visibleTasks.mapIndexed { i, t -> t.copy(ring = i) }
     }
-    // 选中任务按显示集取（筛选重排环序后，镜头/命中须与绘制一致）
+    // 选中任务按显示集取（筛选重排环序后，镜头/命中须与绘制一致）；暗星可被聚焦
     val selected = displayItems.firstOrNull { it.id == selectedId }
+        ?: darkStars.firstOrNull { it.id == selectedId }
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
-    if (selected != null) recentSelected = selected
+    if (selected != null) {
+        recentSelected = selected
+    } else {
+        // 选中项状态变化（如暗星化）时同步刷新锚点数据，保证镜头/命中与当前渲染一致
+        recentSelected = recentSelected?.let { rs -> state.items.firstOrNull { it.id == rs.id } ?: rs }
+    }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
 
     // 帧时钟：驱动星空闪烁 / 琥珀脉冲 / 行星实时位置
@@ -148,10 +161,12 @@ fun OrbitScreen(
     // 因此 scope 与函数定义在顶层，而非聚焦条件块内
     val cycleScope = rememberCoroutineScope()
     fun cycleFocus(dir: Int) {
-        if (displayItems.size <= 1) return
+        // 切换序列：轨道行星 + 暗星（暗星排在行星之后）
+        val cycleList = displayItems + darkStars
+        if (cycleList.size <= 1) return
         cycleScope.launch {
-            val idx = displayItems.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
-            val next = displayItems[(idx + dir + displayItems.size) % displayItems.size].id
+            val idx = cycleList.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
+            val next = cycleList[(idx + dir + cycleList.size) % cycleList.size].id
             // 置空触发 LaunchedEffect 的退焦动画（900ms）；此处直接驱动 zoom 会与之互相取消
             // 导致本协程在 animateTo 处被打断、无法聚焦下一颗行星——故用延时衔接
             selectedId = null
@@ -244,12 +259,6 @@ fun OrbitScreen(
             BitmapFactory.decodeResource(context.resources, R.drawable.moon)?.let { processMoon(it) }?.asImageBitmap()
         }.getOrNull()
     }
-    // 碎裂贴图（polie.png 白底裂纹 → 黑色裂纹透明贴图）：长按删除时叠加在行星上
-    val crackImage = remember {
-        runCatching {
-            BitmapFactory.decodeResource(context.resources, R.drawable.polie)?.let { processCrackTex(it) }?.asImageBitmap()
-        }.getOrNull()
-    }
     // 星光贴图：star.svg 转白的位图，点击特效动态染色/缩放/旋转
     val sparkStar = remember {
         val sizePx = 256
@@ -310,10 +319,14 @@ fun OrbitScreen(
         settledScale = targetScale
     }
 
-    // 新增行星登场时刻 / 消散残影 / 上一帧可见任务快照
+    // 新增行星登场时刻 / 消散残影 / 吞噬残影 / 上一帧可见任务快照
     var spawnedAt by remember { mutableStateOf<Map<Long, Long>>(emptyMap()) }
     var dissolving by remember { mutableStateOf(listOf<DissolvingPlanet>()) }
+    var swallowGhosts by remember { mutableStateOf(listOf<SwallowGhost>()) }
+    // 待播放吞噬动画的任务 id（删除动作先登记，diff 时转成吞噬残影而非消散）
+    val swallowIds = remember { mutableStateListOf<Long>() }
     var prevDisplay by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
+    var prevDark by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
     LaunchedEffect(state.items) {
         // 选中任务被删除时自动退焦，避免聚焦卡引用已移除任务
         val ids = state.items.map { it.id }.toSet()
@@ -328,15 +341,36 @@ fun OrbitScreen(
         if (added.isNotEmpty()) {
             spawnedAt = spawnedAt + added.associate { it.id to nowMs }
         }
-        spawnedAt = spawnedAt.filterKeys { id -> displayItems.any { it.id == id } }
-        // 消失（删除 / 被筛选隐藏 / 环序变化让位）：旧位置放大渐隐
+        spawnedAt = spawnedAt.filterKeys { id -> state.items.any { it.id == id } }
+        // 消失（被筛选隐藏 / 环序变化让位）：旧位置放大渐隐；
+        // 若登记过吞噬则改为螺旋坠入盘心的残影（删除动作）
         val gone = prevDisplay.filter { (it.id to it.ring) !in newIds }
         if (gone.isNotEmpty()) {
-            dissolving = dissolving + gone.map { t ->
+            dissolving = dissolving + gone.filter { it.id !in swallowIds }.map { t ->
                 DissolvingPlanet(frac = t.frac, hue = t.hue, ring = t.ring, born = nowMs)
             }
+            swallowGhosts = swallowGhosts + gone.filter { it.id in swallowIds }.map { t ->
+                SwallowGhost(id = t.id, ring = t.ring, frac = t.frac, hue = t.hue, darkStar = false, darkIndex = 0, born = nowMs)
+            }
+            swallowIds.removeAll(gone.map { it.id })
         }
         prevDisplay = displayItems
+    }
+    // 暗星登场 / 被吞噬：与轨道行星的 diff 分开观察（暗星不在 displayItems 中）
+    LaunchedEffect(darkStars) {
+        val nowMs = withFrameNanos { it } / 1_000_000
+        val added = darkStars.filter { ds -> prevDark.none { it.id == ds.id } }
+        if (added.isNotEmpty()) {
+            spawnedAt = spawnedAt + added.associate { it.id to nowMs }
+        }
+        val gone = prevDark.filter { ds -> darkStars.none { it.id == ds.id } }
+        if (gone.isNotEmpty()) {
+            swallowGhosts = swallowGhosts + gone.filter { it.id in swallowIds }.map { t ->
+                SwallowGhost(id = t.id, ring = -1, frac = 0f, hue = t.hue, darkStar = true, darkIndex = t.darkIndex, born = nowMs)
+            }
+            swallowIds.removeAll(gone.map { it.id })
+        }
+        prevDark = darkStars
     }
 
     // 拖尾星光粒子：已完成行星的彗尾上随机生成，向拖尾末端漂移并渐隐
@@ -347,6 +381,7 @@ fun OrbitScreen(
                 val nowMs = frameNanos / 1_000_000
                 tailStars.removeAll { nowMs - it.born > it.life }
                 dissolving = dissolving.filter { nowMs - it.born < 1000 }
+                swallowGhosts = swallowGhosts.filter { nowMs - it.born < 1000 }
                 // 点击星光过期清理（防止长会话下列表无界增长）
                 sparks.removeAll { nowMs - it.born > 5200 }
                 if (tailStars.size < 90) {
@@ -371,16 +406,22 @@ fun OrbitScreen(
 
     // 背景图在 Composable 层用 Image 绘制；此处移除位图解码逻辑
 
-    // 长按打卡：按住填充（每秒 +1），松手渐退（每秒 -1），满 3 秒完成打卡并点亮行星
-    // 长按删除：聚焦信息卡右侧删除钮，同填充动画但为红色，满 3 秒删除任务（无撤销）
+    // 长按扫描：按住填充（每秒 +1），松手渐退（每秒 -1），满 3 秒完成扫描并点亮行星；
+    // 暗星聚焦时同按钮变长按重构（恢复为正常有轨行星）
+    // 长按回溯扫描：同填充动画，补录上一周期记录
+    // 长按吞噬：聚焦信息卡右侧区域，红色填充满 3 秒删除任务（无撤销）
     var holdDown by remember { mutableStateOf(false) }
     val holdProgress = remember { mutableFloatStateOf(0f) }
+    var retroDown by remember { mutableStateOf(false) }
+    val retroProgress = remember { mutableFloatStateOf(0f) }
     var delDown by remember { mutableStateOf(false) }
     val delProgress = remember { mutableFloatStateOf(0f) }
     val haptic = LocalHapticFeedback.current
     LaunchedEffect(selectedId) {
         holdDown = false
         holdProgress.floatValue = 0f
+        retroDown = false
+        retroProgress.floatValue = 0f
         delDown = false
         delProgress.floatValue = 0f
         if (selectedId == null) return@LaunchedEffect
@@ -392,18 +433,32 @@ fun OrbitScreen(
             last = now
             val hn = if (holdDown) holdProgress.floatValue + dt else holdProgress.floatValue - dt
             holdProgress.floatValue = hn.coerceIn(0f, CHECK_HOLD_S)
+            val rn = if (retroDown) retroProgress.floatValue + dt else retroProgress.floatValue - dt
+            retroProgress.floatValue = rn.coerceIn(0f, CHECK_HOLD_S)
             val dn = if (delDown) delProgress.floatValue + dt else delProgress.floatValue - dt
             delProgress.floatValue = dn.coerceIn(0f, CHECK_HOLD_S)
             if (holdDown && holdProgress.floatValue >= CHECK_HOLD_S) {
                 holdDown = false
                 holdProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onCheck(task.id)
+                if (task.darkStar) {
+                    selectedId = null // 重构：先退焦，暗星随之恢复为正常轨道行星
+                    onReconstruct(task.id)
+                } else {
+                    onCheck(task.id)
+                }
+            }
+            if (retroDown && retroProgress.floatValue >= CHECK_HOLD_S) {
+                retroDown = false
+                retroProgress.floatValue = 0f
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onRetroScan(task.id)
             }
             if (delDown && delProgress.floatValue >= CHECK_HOLD_S) {
                 delDown = false
                 delProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                swallowIds.add(task.id)
                 onDeleteTask(task.id)
             }
         }
@@ -463,12 +518,15 @@ fun OrbitScreen(
                         val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size, tiltAnim.value)
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
-                        val selNow = displayItems.firstOrNull { it.id == selectedId } ?: recentSelected
+                        val selNow = displayItems.firstOrNull { it.id == selectedId }
+                            ?: darkStars.firstOrNull { it.id == selectedId } ?: recentSelected
                         var camScale = 1f
                         var kx = g0.cx; var ky = g0.cy
                         if (selNow != null) {
                             val fp = planetPos(g0, selNow)
-                            val targetZoom = (viewSize.width / (fp.r * 2f)).coerceIn(1f, 40f)
+                            // 暗星本体是虚空，放大到能看清引力圈即可（9x），行星则铺满屏宽
+                            val zcap = if (selNow.darkStar) 9f else 40f
+                            val targetZoom = (viewSize.width / (fp.r * 2f)).coerceIn(1f, zcap)
                             camScale = 1f + (targetZoom - 1f) * zoom.value
                             val dp = ((zoom.value - 0.4f) / 0.6f).coerceIn(0f, 1f)
                             val d = dp * dp * (3f - 2f * dp)
@@ -481,8 +539,8 @@ fun OrbitScreen(
                         val tx = tap.x; val ty = tap.y
                         var best: OrbitTask? = null
                         var bd = 1e9f
-                        // 聚焦态下其他行星已隐藏：只允许点中当前行星（点击=退焦），避免瞬跳到隐藏行星
-                        val candidates = if (zoom.value > 0.5f) selNow?.let { listOf(it) } ?: emptyList() else displayItems
+                        // 聚焦态下其他行星已隐藏：只允许点中当前目标（点击=退焦），避免瞬跳到隐藏行星
+                        val candidates = if (zoom.value > 0.5f) selNow?.let { listOf(it) } ?: emptyList() else displayItems + darkStars
                         candidates.forEach { t ->
                             val p = planetPos(g, t)
                             val dist = hypot((tx - p.x).toDouble(), (ty - p.y).toDouble()).toFloat()
@@ -517,7 +575,9 @@ fun OrbitScreen(
             val selNow = selected ?: recentSelected
             if (selNow != null) {
                 val fp = planetPos(g0, selNow)
-                val targetZoom = (size.width / (fp.r * 2f)).coerceIn(1f, 40f)
+                // 暗星聚焦上限 9x（见命中测试块）；行星铺满屏宽
+                val zcap = if (selNow.darkStar) 9f else 40f
+                val targetZoom = (size.width / (fp.r * 2f)).coerceIn(1f, zcap)
                 camScale = 1f + (targetZoom - 1f) * z
                 val dp = ((z - 0.4f) / 0.6f).coerceIn(0f, 1f)
                 val d = dp * dp * (3f - 2f * dp)   // smoothstep：位移集中在中后段
@@ -578,8 +638,19 @@ fun OrbitScreen(
                             .toFloat().coerceIn(0f, 550f) / 550f,
                         delFill = if (selected?.id == t.id)
                             (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
-                        crackTex = crackImage,
                         fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
+                            (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
+                    )
+                }
+                // 暗星（盘外停靠的过期一次性任务）：在轨道行星之上绘制
+                darkStars.forEach { ds ->
+                    drawDarkStar(
+                        g, ds, timeMs, selected,
+                        showName = showPlanetNames,
+                        dimmed = dimRef != null && dimRef.id != ds.id,
+                        spawn = ((timeMs - (spawnedAt[ds.id] ?: 0L)).coerceAtLeast(0L))
+                            .toFloat().coerceIn(0f, 550f) / 550f,
+                        fill = if (selected?.id == ds.id)
                             (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                     )
                 }
@@ -605,6 +676,9 @@ fun OrbitScreen(
                         }
                     }
                 }
+
+                // 吞噬残影：删除的任务螺旋坠入盘心（暗星原地塌缩），终点黑洞闪现
+                swallowGhosts.forEach { drawSwallowGhost(g, it, timeMs) }
 
                 // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐（仅当前可见行星）
                 drawTailStars(g, displayItems, tailStars, timeMs, sparkStar)
@@ -632,6 +706,9 @@ fun OrbitScreen(
             val pa = ((zoom.value - 0.55f) / 0.45f).coerceIn(0f, 1f)
             val fillFrac = (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
             val done = t.state == PlanetState.DONE
+            // 成长阶段：累计扫描次数驱动（暗星不再成长）
+            val stage = growthStageOf(t.recordCount)
+            val gap = nextGrowthGap(t.recordCount)
             val remainingMs = (t.periodEndMs - System.currentTimeMillis()).coerceAtLeast(0L)
             val remainColor = when (t.state) {
                 PlanetState.LATE -> TermRed
@@ -664,14 +741,24 @@ fun OrbitScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
+                            if (t.darkStar) "一次性任务 · 已过期"
+                            else "${t.cycleLabel} · 已完成 ${t.recordCount} 个周期",
                             color = TermBlueDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
+                            if (t.darkStar) "已于 ${formatWindowStart(t.periodEndMs)} 到期 · 沉寂 ${t.expiredDays} 天"
+                            else if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
                             color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                         )
+                        if (!t.darkStar) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (gap == null) "成长阶段：${GROWTH_NAMES[stage]}（已满阶）"
+                                else "成长阶段：${GROWTH_NAMES[stage]} · 距下一阶段 $gap 次扫描",
+                                color = TermBlueDim, fontSize = 11.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                            )
+                        }
                         if (t.note.isNotBlank()) {
                             Spacer(Modifier.height(4.dp))
                             Text(t.note, color = TermBlueDim, fontSize = 12.sp, maxLines = 2, fontFamily = FontFamily.Monospace)
@@ -687,7 +774,7 @@ fun OrbitScreen(
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f)),
                         )
                     }
-                    // 长按 3 秒删除任务（整个票根右侧区域可按）：红色从左往右填充，完成后轨道行星消散，无撤销
+                    // 长按 3 秒吞噬任务（整个票根右侧区域可按）：红色从左往右填充，完成后行星螺旋坠入盘心，无撤销
                     val delFill = (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
                     Box(
                         Modifier
@@ -711,19 +798,32 @@ fun OrbitScreen(
                                 )
                             }
                         }
-                        Icon(
-                            Icons.Rounded.Delete,
-                            contentDescription = "长按删除任务",
-                            tint = lerp(TermRed, Color.White, delFill),
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .size(20.dp),
-                        )
+                        // 自绘吞噬符记（✕ 交叉线）+ 标签，替代 material 图标库
+                        Column(
+                            Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Canvas(Modifier.size(18.dp)) {
+                                val glyph = lerp(TermRed, Color.White, delFill)
+                                val rr = 7.dp.toPx()
+                                val stroke = 2.2.dp.toPx()
+                                drawLine(glyph, Offset(size.width / 2 - rr, size.height / 2 - rr), Offset(size.width / 2 + rr, size.height / 2 + rr), strokeWidth = stroke)
+                                drawLine(glyph, Offset(size.width / 2 - rr, size.height / 2 + rr), Offset(size.width / 2 + rr, size.height / 2 - rr), strokeWidth = stroke)
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "吞噬",
+                                color = lerp(TermRed, Color.White, delFill),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 2.sp,
+                            )
+                        }
                     }
                 }
             }
 
-            // 底部操作卡：编辑 / 长按打卡 / 历史；聚焦时从下往上出现，退焦反向
+            // 底部操作卡：改造 / 长按扫描（暗星=长按重构）/ 追溯；聚焦时从下往上出现，退焦反向
             Box(
                 Modifier
                     .align(Alignment.BottomCenter)
@@ -772,6 +872,46 @@ fun OrbitScreen(
                         }
                     }
                     Spacer(Modifier.height(4.dp))
+                    // 回溯扫描：上一周期未扫描时出现在扫描键上方（一次性任务/暗星无追溯）
+                    if (t.retroAvailable && !t.darkStar) {
+                        val retroFillFrac = (retroProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f)
+                        Box(
+                            Modifier
+                                .fillMaxWidth().height(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BtnBg)
+                                .pointerInput(t.id) {
+                                    detectTapGestures(
+                                        onPress = {
+                                            retroDown = true
+                                            try { awaitRelease() } finally { retroDown = false }
+                                        },
+                                    )
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(Modifier.matchParentSize()) {
+                                if (retroFillFrac > 0f) {
+                                    drawRect(TermBlue, size = Size(size.width * retroFillFrac, size.height))
+                                }
+                                // 虚线边框：区别于主操作键
+                                drawRoundRect(
+                                    TermBlueDim.copy(alpha = 0.55f),
+                                    topLeft = Offset(1f, 1f),
+                                    size = Size(size.width - 2f, size.height - 2f),
+                                    cornerRadius = CornerRadius(10.dp.toPx()),
+                                    style = Stroke(1.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f))),
+                                )
+                            }
+                            Text(
+                                if (retroFillFrac > 0f) "${(retroFillFrac * 100).toInt()}%"
+                                else "长按回溯扫描 · 补录上一周期",
+                                color = lerp(TermInk, Color(0xFF06222B), retroFillFrac),
+                                fontSize = 13.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp,
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(
                         Modifier
@@ -782,7 +922,7 @@ fun OrbitScreen(
                             .clickable { onEdit(t.id) },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("编辑", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                        Text("改造", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
                     }
                     Box(
                         Modifier
@@ -812,24 +952,27 @@ fun OrbitScreen(
                         }
                         Text(
                             when {
+                                t.darkStar -> "长按重构"
                                 done -> "本周期已点亮"
                                 fillFrac > 0f -> "${(fillFrac * 100).toInt()}%"
-                                else -> "长按打卡"
+                                else -> "长按扫描"
                             },
-                            color = if (done) TermBlueBright else lerp(TermInk, Color(0xFF06222B), fillFrac),
+                            color = if (done || t.darkStar && fillFrac <= 0f) TermBlueBright else lerp(TermInk, Color(0xFF06222B), fillFrac),
                             fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp,
                         )
                     }
-                    Box(
-                        Modifier
-                            .weight(0.8f).height(52.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(BtnBg)
-                            .border(1.dp, TermBlueDim.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                            .clickable { onOpenRecords(t.id) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("历史", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                    if (!t.darkStar) {
+                        Box(
+                            Modifier
+                                .weight(0.8f).height(52.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(BtnBg)
+                                .border(1.dp, TermBlueDim.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                .clickable { onOpenRecords(t.id) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("追溯", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
+                        }
                     }
                 }
                 }

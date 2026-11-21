@@ -6,7 +6,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import java.io.File
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * 单例仓库：内存中持有全部数据，变更后原子写入本地 JSON 文件。
@@ -151,6 +153,44 @@ class TaskRepository private constructor(private val context: Context) {
         )
         persist()
         record
+    }
+
+    /**
+     * 回溯扫描：为上一周期补一条记录。记录不写实际操作时刻——
+     * createdAtEpochMs 锚定在上一周期窗口起点（保证周期状态计算不被误判为当前周期已完成），
+     * retro = true，追溯列表中以「补」呈现。
+     */
+    fun retroCheckIn(taskId: Long, window: PeriodWindow): CheckRecord = synchronized(lock) {
+        val epochDay = Instant.ofEpochMilli(window.startMs).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()
+        val record = CheckRecord(
+            id = data.nextRecordId,
+            taskId = taskId,
+            epochDay = epochDay,
+            createdAtEpochMs = window.startMs,
+            retro = true,
+        )
+        data = data.copy(
+            records = data.records + record,
+            nextRecordId = data.nextRecordId + 1,
+            tasks = data.tasks.map {
+                if (it.id == taskId) {
+                    it.copy(lastDoneEpochDay = maxOf(it.lastDoneEpochDay ?: Long.MIN_VALUE, epochDay))
+                } else it
+            },
+        )
+        persist()
+        record
+    }
+
+    /** 重构暗星：过期一次性任务以今天为窗口起点重新起算，恢复为正常有轨行星（历史保留） */
+    fun reviveTask(taskId: Long) = synchronized(lock) {
+        val today = LocalDate.now().toEpochDay()
+        data = data.copy(
+            tasks = data.tasks.map {
+                if (it.id == taskId) it.copy(createdEpochDay = today, lastDoneEpochDay = null) else it
+            },
+        )
+        persist()
     }
 
     /** 撤销一次打卡：删除该记录，并把任务最近打卡日期回退到剩余记录中的最大值 */

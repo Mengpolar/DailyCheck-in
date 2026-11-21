@@ -42,6 +42,14 @@ data class OrbitTask(
     val cycleDayX: Int,
     val hasImage: Boolean,
     val imagePath: String?,
+    /** 上一周期未扫描 → 聚焦页可回溯扫描（一次性任务恒为 false） */
+    val retroAvailable: Boolean = false,
+    /** 过期一次性任务化作暗星：无轨道，停靠在盘外空白区 */
+    val darkStar: Boolean = false,
+    /** 暗星序位（按 id 排序后的稳定下标，驱动停靠位与错位偏移） */
+    val darkIndex: Int = 0,
+    /** 暗星已过期天数（非暗星为 0） */
+    val expiredDays: Int = 0,
 )
 
 data class OrbitUiState(
@@ -112,19 +120,22 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
     private fun computeOrbit(d: AppData, nowMs: Long): OrbitUiState {
         val today = Instant.ofEpochMilli(nowMs).atZone(ZONE).toLocalDate()
         val todayEpochDay = today.toEpochDay()
-        val items = d.tasks.mapIndexedNotNull { index, task ->
+        // 先构建全部任务，再分配序位：普通行星按序占轨道环；过期一次性任务化作暗星（不占环）
+        val built = d.tasks.map { task ->
             val lastMs = lastCheckMs(d, task.id)
             val state = task.planetState(nowMs, lastMs)
             val done = state == PlanetState.DONE
             val window = task.periodWindow(nowMs)
-            // 一次性任务过期未打卡 → 消散，不再呈现
-            if (task.intervalDays <= 0 && !done && window.endMs < nowMs) return@mapIndexedNotNull null
             val records = d.records.filter { it.taskId == task.id }
-            val tail = if (done && lastMs != null) {
+            // 一次性任务过期且从未扫描 → 暗星（不再是有轨行星）
+            val dark = task.intervalDays <= 0 && !done && window.endMs < nowMs
+            val tail = if (!dark && done && lastMs != null) {
                 (1f - ((nowMs - lastMs).toFloat() / window.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
             } else 0f
             val cycleDayX = if (task.intervalDays <= 0) 0
             else (((todayEpochDay - task.createdEpochDay).coerceAtLeast(0) % task.intervalDays.coerceAtLeast(1)) + 1).toInt()
+            val prevWin = task.previousPeriodWindow(nowMs)
+            val retroAvailable = prevWin != null && !records.anyInWindow(prevWin)
             OrbitTask(
                 id = task.id,
                 name = task.name,
@@ -136,14 +147,22 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 frac = task.periodFraction(nowMs),
                 tail = tail,
                 hue = hueOf(task.name),
-                ring = index,
+                ring = 0,
                 recordCount = records.size,
                 periodEndMs = window.endMs,
                 onceDays = task.onceDays,
                 cycleDayX = cycleDayX,
                 hasImage = task.imagePath != null,
                 imagePath = task.imagePath,
+                retroAvailable = retroAvailable,
+                darkStar = dark,
+                expiredDays = if (dark) (((nowMs - window.endMs) / 86_400_000L) + 1).toInt() else 0,
             )
+        }
+        var ring = 0
+        var darkIdx = 0
+        val items = built.map { t ->
+            if (t.darkStar) t.copy(darkIndex = darkIdx++) else t.copy(ring = ring++)
         }
         return OrbitUiState(today = today, items = items)
     }
@@ -221,6 +240,20 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         val record = repo.checkIn(taskId, LocalDate.now())
         refresh()
         return record
+    }
+
+    /** 回溯扫描：为上一周期补录（一次性任务无上一周期，调用方保证不触发） */
+    fun retroScan(taskId: Long) {
+        val task = dataFlow.value.tasks.firstOrNull { it.id == taskId } ?: return
+        val window = task.previousPeriodWindow(System.currentTimeMillis()) ?: return
+        repo.retroCheckIn(taskId, window)
+        refresh()
+    }
+
+    /** 重构暗星：恢复为正常有轨行星（窗口从今天重新起算） */
+    fun reconstruct(taskId: Long) {
+        repo.reviveTask(taskId)
+        refresh()
     }
 
     fun undoCheck(recordId: Long) {
