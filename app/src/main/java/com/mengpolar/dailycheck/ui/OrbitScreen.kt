@@ -153,7 +153,8 @@ private class Geo(
     fun dp(v: Float) = v * s
 }
 
-/** 轨道半径序列（px）：单轨道放大；多轨道把可用半径带按可见数量均分（筛选补位后行星更聚拢） */
+/** 轨道半径序列（px）：单轨道放大；多轨道 60dp 起步、环距下限 56dp（≥行星直径防堆叠），
+ *  可见数量少时按可用半径带摊开（筛选补位放大），超出时整盘等比缩 */
 private fun orbitRadii(wPx: Float, hPx: Float, d: Float, orbitCount: Int): List<Float> {
     if (orbitCount <= 0 || wPx <= 0f || hPx <= 0f) return emptyList()
     val s = d
@@ -163,17 +164,27 @@ private fun orbitRadii(wPx: Float, hPx: Float, d: Float, orbitCount: Int): List<
     return when {
         orbitCount == 1 -> listOf(cap * 0.60f)
         else -> {
-            val inner = cap * 0.32f
-            val outer = cap * 0.72f
-            val step = (outer - inner) / (orbitCount - 1)
-            (0 until orbitCount).map { i -> inner + step * i }
+            val capDp = cap / s
+            val innerDp = 60f
+            val minStepDp = 72f
+            val stepDp = maxOf(minStepDp, (capDp - innerDp) * 0.42f / (orbitCount - 1))
+            val outerDp = innerDp + stepDp * (orbitCount - 1)
+            val fit = minOf(1f, capDp * 0.92f / outerDp)
+            (0 until orbitCount).map { i -> (innerDp + stepDp * i) * fit * s }
         }
     }
 }
 
-/** 行星尺寸系数：可见数量越少行星越大（配合筛选补位放大） */
-private fun planetScaleFor(orbitCount: Int): Float = if (orbitCount <= 1) 1.35f
-    else (1.30f - 0.10f * (orbitCount - 1)).coerceIn(0.90f, 1.35f)
+/** 行星尺寸系数：可见数量越少行星越大（配合筛选补位放大）；盘面被等比缩时同步缩小 */
+private fun planetScaleFor(orbitCount: Int, wPx: Float, hPx: Float, d: Float): Float {
+    val radii = orbitRadii(wPx, hPx, d, orbitCount)
+    if (radii.isEmpty()) return 1f
+    val countFactor = if (orbitCount <= 1) 1.35f
+        else (1.30f - 0.10f * (orbitCount - 1)).coerceIn(0.90f, 1.35f)
+    val idealOuterDp = if (orbitCount <= 1) radii[0] / d else 60f + 56f * (orbitCount - 1)
+    val fit = if (idealOuterDp <= 0f) 1f else (radii.last() / d / idealOuterDp).coerceIn(0.62f, 1f)
+    return (countFactor * fit).coerceIn(0.62f, 1.35f)
+}
 
 /** 半径插值：长度不同时以末值补位（新增轨道自上一外圈滑出，移除时滑回补位） */
 private fun lerpRadii(from: List<Float>, to: List<Float>, f: Float): List<Float> {
@@ -189,7 +200,7 @@ private fun lerpRadii(from: List<Float>, to: List<Float>, f: Float): List<Float>
 private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ: Float): Geo {
     val s = d
     val radii = orbitRadii(wPx, hPx, d, orbitCount)
-    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScaleFor(orbitCount))
+    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScaleFor(orbitCount, wPx, hPx, d))
 }
 
 /** 相机变换：K 为镜头中心（显示在屏幕中央的世界点），camScale 为倍率；camScale=1 且 K=几何中心时为恒等 */
@@ -432,7 +443,9 @@ fun OrbitScreen(
     val targetRadii = remember(viewSize, displayItems.size) {
         orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size)
     }
-    val targetScale = remember(displayItems.size) { planetScaleFor(displayItems.size) }
+    val targetScale = remember(viewSize, displayItems.size) {
+        planetScaleFor(displayItems.size, viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity)
+    }
     var settledRadii by remember { mutableStateOf<List<Float>?>(null) }
     var settledScale by remember { mutableFloatStateOf(1f) }
     var animFrom by remember { mutableStateOf<List<Float>?>(null) }
