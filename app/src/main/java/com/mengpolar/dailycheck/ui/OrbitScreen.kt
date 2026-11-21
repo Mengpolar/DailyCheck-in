@@ -67,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -1389,27 +1390,34 @@ private fun DrawScope.drawTask(
         }
     }
 
-    // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
-    if (t.state == PlanetState.NEAR) {
-        val pulse = 0.3f + 0.32f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
-        drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.3f * g.s))
-    }
-    if (late) {
-        drawCircle(LateColor.copy(alpha = 0.5f * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.2f * g.s))
-    }
-    if (t.state == PlanetState.PENDING) {
-        drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
-    }
+    // 聚焦态轻微左右翻转（提前计算：状态环/完成光晕/行星本体/玻璃轮廓全部随翻转压缩）
+    val yaw = (tilt.y * 1.2f).coerceIn(-0.9f, 0.9f)
+    val halfW = if (sel) r * cos(yaw) else r
+    val flipScale = halfW / r.coerceAtLeast(1f)
 
-    // 已完成光晕（克制）
-    if (done) {
-        drawCircle(
-            Brush.radialGradient(
-                listOf(hsla(t.hue, 0.6f, 0.62f, 0.22f * dim), Color.Black.copy(alpha = 0f)),
-                center = Offset(p.x, p.y), radius = r * 2.1f,
-            ),
-            r * 2.1f, Offset(p.x, p.y),
-        )
+    // 状态环：临近到期 = 琥珀脉冲；逾期 = 暗红；待办 = 星图描边圈（保证黑白星可见）
+    scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
+        if (t.state == PlanetState.NEAR) {
+            val pulse = 0.3f + 0.32f * (0.5f + 0.5f * sin(timeMs / 500f + t.ring * 2f))
+            drawCircle(hsla(40, 0.85f, 0.62f, pulse * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.3f * g.s))
+        }
+        if (late) {
+            drawCircle(LateColor.copy(alpha = 0.5f * dim), r + 5f * g.s, Offset(p.x, p.y), style = Stroke(1.2f * g.s))
+        }
+        if (t.state == PlanetState.PENDING) {
+            drawCircle(Color(0x59C4CCDE).copy(alpha = 0.4f * dim), r + 2.5f * g.s, Offset(p.x, p.y), style = Stroke(1f * g.s))
+        }
+
+        // 已完成光晕（克制）
+        if (done) {
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(hsla(t.hue, 0.6f, 0.62f, 0.22f * dim), Color.Black.copy(alpha = 0f)),
+                    center = Offset(p.x, p.y), radius = r * 2.1f,
+                ),
+                r * 2.1f, Offset(p.x, p.y),
+            )
+        }
     }
 
     // 行星本体
@@ -1420,9 +1428,6 @@ private fun DrawScope.drawTask(
     } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
 
     val bmp = images[t.id]
-    // 聚焦态轻微左右翻转：水平压缩（重力投影驱动，幅度随方向盘式倾斜；程序星体同样套用）
-    val yaw = (tilt.y * 1.2f).coerceIn(-0.9f, 0.9f)
-    val halfW = if (sel) r * cos(yaw) else r
     if (bmp != null) {
         val paint = if (done) planetPaintNormal else planetPaintGray
         paint.alpha = (alpha * 255).toInt()
@@ -1448,7 +1453,7 @@ private fun DrawScope.drawTask(
             }
         }
     } else {
-        scale(halfW / r.coerceAtLeast(1f), 1f, pivot = Offset(p.x, p.y)) {
+        scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
             drawProceduralPlanet(p.x, p.y, r, t.hue, done, alpha)
             if (sel && !done && fill > 0f) {
                 clipRect(
@@ -1475,19 +1480,22 @@ private fun DrawScope.drawTask(
                 ),
                 r, Offset(p.x, p.y),
             )
-            // 高光斑：随姿态漂移（移向抬起的边缘）
+            // 高光斑：加色模式（任意底色上都发亮），随姿态扫向抬起的边缘
             drawCircle(
                 Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = 0.32f), Color.Transparent),
-                    center = Offset(p.x - tilt.y * r * 0.75f, p.y - r * 0.45f + tilt.x * r * 0.30f),
-                    radius = r * 0.9f,
+                    0f to Color.White.copy(alpha = 0.55f),
+                    0.5f to Color.White.copy(alpha = 0.20f),
+                    1f to Color.Transparent,
+                    center = Offset(p.x - tilt.y * r * 0.8f, p.y - r * 0.45f + tilt.x * r * 0.30f),
+                    radius = r * 0.6f,
                 ),
                 r, Offset(p.x, p.y),
+                blendMode = BlendMode.Plus,
             )
         }
     }
     // 液态玻璃质感（球面暗角 + 边缘亮环随翻转一起水平压缩，行星整体透明度淡出）
-    scale(halfW / r.coerceAtLeast(1f), 1f, pivot = Offset(p.x, p.y)) {
+    scale(flipScale, 1f, pivot = Offset(p.x, p.y)) {
         drawCircle(
             Brush.radialGradient(
                 listOf(Color(0x00000000), Color(0x59000000).copy(alpha = 0x59 / 255f * alpha)),
