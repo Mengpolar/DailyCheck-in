@@ -19,3 +19,4 @@ captures/
 # 杂项
 .DS_Store
 *.log
+.verify/
