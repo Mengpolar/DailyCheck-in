@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import android.util.Log
 import androidx.core.content.FileProvider
 import com.mengpolar.dailycheck.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -121,13 +120,11 @@ object UpdateManager {
     /** 流式下载（单源）；完成后校验 APK 魔数，防止镜像 200 返回错误页 */
     private suspend fun downloadFrom(url: String, dest: File, onProgress: (Float) -> Unit): File =
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "download start: $url")
             dest.parentFile?.mkdirs()
             val tmp = File(dest.parentFile, dest.name + ".part")
             val req = Request.Builder().url(url).header("User-Agent", "DailyCheck-in-App").build()
             try {
                 client.newCall(req).execute().use { resp ->
-                    Log.d(TAG, "http ${resp.code} len=${resp.body?.contentLength()}")
                     if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
                     val body = resp.body ?: throw RuntimeException("下载内容为空")
                     val total = body.contentLength()
@@ -144,7 +141,6 @@ object UpdateManager {
                             }
                         }
                     }
-                    Log.d(TAG, "downloaded $read bytes (total=$total)")
                     if (total > 0 && read < total) throw RuntimeException("下载不完整")
                 }
                 if (!looksLikeApk(tmp)) {
@@ -154,10 +150,8 @@ object UpdateManager {
                     tmp.copyTo(dest, overwrite = true)
                     tmp.delete()
                 }
-                Log.d(TAG, "saved: ${dest.absolutePath} (${dest.length()} bytes)")
                 dest
             } catch (e: Exception) {
-                Log.d(TAG, "download failed: ${e.message}")
                 tmp.delete()
                 throw e
             }

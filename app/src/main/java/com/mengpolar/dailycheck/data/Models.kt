@@ -52,8 +52,6 @@ data class AppData(
 /** 当前周期窗口：行星从 startMs 出发，durMs 走完一圈到达 endMs */
 data class PeriodWindow(val startMs: Long, val endMs: Long, val durMs: Long)
 
-fun Task.anchorWeekdayChar(): String = "一二三四五六日"[anchorWeekday.coerceIn(1, 7) - 1].toString()
-
 fun Task.creationAnchorMs(): Long =
     // createdEpochDay 是本地时区的日期，0 点必须按本地时区换算 epoch
     // （直接乘 86400000 得到的是 UTC 0 点，UTC+8 下锚点整体偏移 +8 小时）
@@ -98,12 +96,6 @@ fun Task.planetState(nowMs: Long, lastCheckMs: Long?): PlanetState {
     return PlanetState.PENDING
 }
 
-fun Task.anchorLabel(): String = when {
-    intervalDays == 7 -> "周" + anchorWeekdayChar() + " %02d:%02d".format(anchorMin.coerceIn(0, 1439) / 60, anchorMin % 60)
-    intervalDays == 1 -> "%02d:%02d".format(anchorMin.coerceIn(0, 1439) / 60, anchorMin % 60)
-    else -> "创建日起"
-}
-
 fun Task.cycleLabel(): String = when {
     intervalDays <= 0 -> "一次性"
     intervalDays.coerceAtLeast(1) == 1 -> "每天"
@@ -116,7 +108,5 @@ fun formatWindowStart(ms: Long): String {
 }
 
 fun formatDate(d: LocalDate): String = "${d.year}年${d.monthValue}月${d.dayOfMonth}日"
-
-fun formatDateShort(d: LocalDate): String = "${d.monthValue}月${d.dayOfMonth}日"
 
 fun weekdayLabel(d: LocalDate): String = "周" + "一二三四五六日"[d.dayOfWeek.value - 1]

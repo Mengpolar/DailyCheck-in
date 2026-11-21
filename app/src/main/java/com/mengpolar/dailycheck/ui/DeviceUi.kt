@@ -9,7 +9,6 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -19,7 +18,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -387,7 +385,7 @@ internal fun DeviceScreen(
 
 // ============ 屏内终端控件 ============
 
-/** 终端输入行：「标签 >」 + 天蓝下划线 + 等宽输入 + 聚焦/错误态 */
+/** 终端输入行：「标签 >」 + 天蓝下划线 + 等宽输入 + 聚焦/错误态；singleLine=false 时随内容换行 */
 @Composable
 internal fun TerminalField(
     label: String,
@@ -396,6 +394,7 @@ internal fun TerminalField(
     modifier: Modifier = Modifier,
     isError: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
+    singleLine: Boolean = true,
 ) {
     var focused by remember { mutableStateOf(false) }
     val lineColor = when {
@@ -421,7 +420,7 @@ internal fun TerminalField(
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                singleLine = true,
+                singleLine = singleLine,
                 textStyle = TextStyle(
                     color = TermInk,
                     fontSize = 15.sp,

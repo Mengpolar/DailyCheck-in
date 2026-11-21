@@ -24,9 +24,7 @@ data class OrbitTask(
     val note: String,
     val intervalDays: Int,
     val anchorMin: Int,
-    val anchorWeekday: Int,
     val cycleLabel: String,
-    val anchorLabel: String,
     val state: PlanetState,
     /** 周期进度 0..1 */
     val frac: Float,
@@ -35,9 +33,6 @@ data class OrbitTask(
     val hue: Int,
     /** 轨道序号 = 创建顺序（每个任务一条独立轨道，由内向外） */
     val ring: Int,
-    val nextText: String,
-    val circleNo: Int,
-    val lastCheckText: String,
     val recordCount: Int,
     /** 当前周期窗口结束时刻（epoch ms），聚焦页倒计时用 */
     val periodEndMs: Long,
@@ -52,32 +47,22 @@ data class OrbitTask(
 data class OrbitUiState(
     val today: LocalDate,
     val items: List<OrbitTask> = emptyList(),
-) {
-    val doneCount: Int get() = items.count { it.state == PlanetState.DONE }
-    val total: Int get() = items.size
-}
+)
 
-/** 列表项展示状态（详情页复用） */
+/** 编辑表单回填用（详情页仅展示 records，不再复用） */
 data class TaskUi(
     val id: Long,
     val name: String,
     val note: String,
     val intervalDays: Int,
     val anchorMin: Int,
-    val anchorWeekday: Int,
-    val cycleLabel: String,
-    val anchorLabel: String,
-    val done: Boolean,
-    val statusText: String,
     val hasImage: Boolean,
     val onceDays: Int = 0,
     val cycleDayX: Int = 1,
 )
 
+/** 历史页状态：仅打卡记录列表 */
 data class DetailUiState(
-    val task: TaskUi,
-    val recordCount: Int,
-    val lastRecordDate: LocalDate?,
     val records: List<CheckRecord>,
 )
 
@@ -97,6 +82,15 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean("show_planet_names", enabled).apply()
     }
 
+    /** 新建流程暂存的行星图（放在 VM 中以在屏幕旋转后保留，变更可观察） */
+    private val _pendingImage = MutableStateFlow<Bitmap?>(null)
+
+    /** 可观察读取：Composable 用 collectAsState 订阅 */
+    val pendingImageState: StateFlow<Bitmap?> = _pendingImage
+    var pendingImage: Bitmap?
+        get() = _pendingImage.value
+        set(value) { _pendingImage.value = value }
+
     init {
         // 定期刷新：跨周期边界时自动更新行星状态
         viewModelScope.launch {
@@ -109,24 +103,6 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun lastCheckMs(d: AppData, taskId: Long?): Long? =
         taskId?.let { id -> d.records.filter { it.taskId == id }.maxOfOrNull { it.createdAtEpochMs } }
-
-    private fun lastCheckText(ms: Long): String {
-        val t = Instant.ofEpochMilli(ms).atZone(ZONE)
-        val today = LocalDate.now()
-        val time = "%02d:%02d".format(t.hour, t.minute)
-        return when (t.toLocalDate()) {
-            today -> "今日 $time"
-            today.minusDays(1) -> "昨日 $time"
-            else -> "${t.monthValue}/${t.dayOfMonth} $time"
-        }
-    }
-
-    private fun nextText(t: Task, state: PlanetState, nowMs: Long): String = when (state) {
-        PlanetState.DONE -> "下次 ${formatWindowStart(t.periodWindow(nowMs).endMs)}"
-        PlanetState.LATE -> "打卡后重新点亮"
-        PlanetState.NEAR -> "即将到期 · 若隐若现"
-        PlanetState.PENDING -> "周期内任意时间可打卡"
-    }
 
     private fun hueOf(name: String): Int {
         val palette = listOf(42, 205, 160, 268, 8, 330, 190, 95, 65, 285)
@@ -155,17 +131,12 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 note = task.note,
                 intervalDays = task.intervalDays,
                 anchorMin = task.anchorMin,
-                anchorWeekday = task.anchorWeekday,
                 cycleLabel = task.cycleLabel(),
-                anchorLabel = task.anchorLabel(),
                 state = state,
                 frac = task.periodFraction(nowMs),
                 tail = tail,
                 hue = hueOf(task.name),
                 ring = index,
-                nextText = nextText(task, state, nowMs),
-                circleNo = records.size + 1,
-                lastCheckText = lastMs?.let { lastCheckText(it) } ?: "从未打卡",
                 recordCount = records.size,
                 periodEndMs = window.endMs,
                 onceDays = task.onceDays,
@@ -185,39 +156,12 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 computeOrbit(repo.snapshot(), System.currentTimeMillis()),
             )
 
+    /** 历史页状态：detailTaskId 为 null 时保持 null（不弹出历史面板） */
     val detailState: StateFlow<DetailUiState?> =
         combine(dataFlow, detailTaskId) { d, id ->
-            val task = d.tasks.firstOrNull { it.id == id } ?: return@combine null
-            val nowMs = System.currentTimeMillis()
-            val lastMs = lastCheckMs(d, id)
-            val state = task.planetState(nowMs, lastMs)
-            val records = d.records.filter { it.taskId == id }.sortedByDescending { it.createdAtEpochMs }
-            val statusText = when (state) {
-                PlanetState.DONE -> "✓ 本周期已点亮"
-                PlanetState.LATE -> "⚠ 已逾期 · 正在熄灭"
-                PlanetState.NEAR -> "临近到期 · 若隐若现"
-                PlanetState.PENDING -> "待打卡 · 黑白星"
-            }
+            if (id == null) return@combine null
             DetailUiState(
-                task = TaskUi(
-                    id = task.id,
-                    name = task.name,
-                    note = task.note,
-                    intervalDays = task.intervalDays,
-                    anchorMin = task.anchorMin,
-                    anchorWeekday = task.anchorWeekday,
-                    cycleLabel = task.cycleLabel(),
-                    anchorLabel = task.anchorLabel(),
-                    done = state == PlanetState.DONE,
-                    statusText = statusText,
-                    hasImage = task.imagePath != null,
-                    onceDays = task.onceDays,
-                    cycleDayX = (((LocalDate.now().toEpochDay() - task.createdEpochDay).coerceAtLeast(0)
-                        % task.intervalDays.coerceAtLeast(1)) + 1).toInt(),
-                ),
-                recordCount = records.size,
-                lastRecordDate = records.maxOfOrNull { LocalDate.ofEpochDay(it.epochDay) },
-                records = records,
+                records = d.records.filter { it.taskId == id }.sortedByDescending { it.createdAtEpochMs },
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 

@@ -2,13 +2,11 @@
 
 package com.mengpolar.dailycheck
 
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,7 +20,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -68,7 +65,8 @@ private fun App() {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showEditSheet by rememberSaveable { mutableStateOf(false) }
     var editTaskId by rememberSaveable { mutableStateOf<Long?>(null) }
-    var pendingImage by remember { mutableStateOf<Bitmap?>(null) } // 新建流程暂存的行星图
+    // 新建流程暂存的行星图（存于 VM，屏幕旋转后不丢失）
+    val pendingImage by taskVm.pendingImageState.collectAsState()
     var cropUri by remember { mutableStateOf<Uri?>(null) }
     var showGallery by remember { mutableStateOf(false) }
 
@@ -162,11 +160,6 @@ private fun App() {
                     note = o.note,
                     intervalDays = o.intervalDays,
                     anchorMin = o.anchorMin,
-                    anchorWeekday = o.anchorWeekday,
-                    cycleLabel = o.cycleLabel,
-                    anchorLabel = o.anchorLabel,
-                    done = o.state == com.mengpolar.dailycheck.data.PlanetState.DONE,
-                    statusText = "",
                     hasImage = o.hasImage,
                     onceDays = o.onceDays,
                     cycleDayX = o.cycleDayX,
@@ -181,7 +174,7 @@ private fun App() {
             onPickImage = pickImage,
             onRemoveImage = {
                 val id = editTaskId
-                if (id != null) taskVm.setPlanetImage(id, null) else pendingImage = null
+                if (id != null) taskVm.setPlanetImage(id, null) else taskVm.pendingImage = null
             },
             onDismiss = { showEditSheet = false },
             onSave = { id, name, note, intervalDays, anchorMin, image, cycleDayX, onceDays ->
@@ -190,7 +183,7 @@ private fun App() {
                 } else {
                     taskVm.editTask(id, name, note, intervalDays, anchorMin, cycleDayX, onceDays)
                 }
-                pendingImage = null
+                taskVm.pendingImage = null
                 showEditSheet = false
             },
         )
@@ -216,7 +209,7 @@ private fun App() {
                 uri = uri,
                 onConfirm = { bmp ->
                     val id = editTaskId
-                    if (id != null) taskVm.setPlanetImage(id, bmp) else pendingImage = bmp
+                    if (id != null) taskVm.setPlanetImage(id, bmp) else taskVm.pendingImage = bmp
                     cropUri = null
                 },
                 onCancel = { cropUri = null },

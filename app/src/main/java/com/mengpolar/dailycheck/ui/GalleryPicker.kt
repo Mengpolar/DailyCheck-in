@@ -55,7 +55,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
-import java.util.concurrent.atomic.AtomicInteger
 
 private val GalleryGold = Color(0xFFD8B36A)
 private val GalleryInk = Color(0xFFD9DEE8)
@@ -222,8 +221,7 @@ private fun GalleryThumb(uri: Uri, onPick: (Uri) -> Unit) {
             .aspectRatio(1f)
             .clip(RoundedCornerShape(4.dp))
             .clickable {
-                android.util.Log.d("CropScreen", "gallery picked uri=$uri")
-                onPick(uri)
+                        onPick(uri)
             }
     ) {
         val bmp = thumb

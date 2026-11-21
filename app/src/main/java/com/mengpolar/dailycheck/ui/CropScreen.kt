@@ -56,7 +56,6 @@ private fun decodeUri(context: android.content.Context, uri: Uri, maxSide: Int):
     try {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        android.util.Log.d("CropScreen", "bounds=${bounds.outWidth}x${bounds.outHeight} mime=${bounds.outMimeType}")
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
@@ -64,7 +63,6 @@ private fun decodeUri(context: android.content.Context, uri: Uri, maxSide: Int):
         val bmp = context.contentResolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, opts)
         }
-        android.util.Log.d("CropScreen", "decoded=${bmp != null} size=${bmp?.width}x${bmp?.height}")
         return bmp
     } catch (t: Throwable) {
         android.util.Log.e("CropScreen", "decodeUri failed", t)
