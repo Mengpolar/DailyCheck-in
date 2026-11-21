@@ -108,8 +108,8 @@ internal fun rememberTilt(): State<Tilt> {
                     // 设备轴在世界坐标中的方向 = R 的列（rm 行主序：列0=(rm[0],rm[3],rm[6])…）
                     val d0 = -0.5f * rm[0] - 0.5f * rm[3] + 0.75f * rm[6] // 光在设备 X（屏幕右）分量
                     val d1 = -0.5f * rm[1] - 0.5f * rm[4] + 0.75f * rm[7] // 光在设备 Y（屏幕上）分量
-                    val nx = (d0 / 1.05f).coerceIn(-1f, 1f)
-                    val ny = (d1 / 1.05f).coerceIn(-1f, 1f)
+                    val nx = (d0 / 0.9f).coerceIn(-1f, 1f)
+                    val ny = (d1 / 0.9f).coerceIn(-1f, 1f)
                     val cur = tilt.value
                     tilt.value = Tilt(
                         x = cur.x + (ny - cur.x) * 0.4f,

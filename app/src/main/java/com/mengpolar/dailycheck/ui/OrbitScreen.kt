@@ -79,6 +79,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.nativeCanvas
@@ -1419,8 +1420,8 @@ private fun DrawScope.drawTask(
     } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
 
     val bmp = images[t.id]
-    // 聚焦态轻微左右翻转：水平压缩（幅度随陀螺仪，很小）
-    val yaw = tilt.y * 0.3f
+    // 聚焦态轻微左右翻转：水平压缩（幅度随陀螺仪；程序星体同样套用）
+    val yaw = tilt.y * 0.6f
     val halfW = if (sel) r * cos(yaw) else r
     if (bmp != null) {
         val paint = if (done) planetPaintNormal else planetPaintGray
@@ -1447,15 +1448,17 @@ private fun DrawScope.drawTask(
             }
         }
     } else {
-        drawProceduralPlanet(p.x, p.y, r, t.hue, done, alpha)
-        if (sel && !done && fill > 0f) {
-            clipRect(
-                left = p.x - r,
-                top = p.y + r - 2f * r * fill,
-                right = p.x + r,
-                bottom = p.y + r,
-            ) {
-                drawProceduralPlanet(p.x, p.y, r, t.hue, true, alpha)
+        scale(halfW / r.coerceAtLeast(1f), 1f, pivot = Offset(p.x, p.y)) {
+            drawProceduralPlanet(p.x, p.y, r, t.hue, done, alpha)
+            if (sel && !done && fill > 0f) {
+                clipRect(
+                    left = p.x - r,
+                    top = p.y + r - 2f * r * fill,
+                    right = p.x + r,
+                    bottom = p.y + r,
+                ) {
+                    drawProceduralPlanet(p.x, p.y, r, t.hue, true, alpha)
+                }
             }
         }
     }
@@ -1466,7 +1469,7 @@ private fun DrawScope.drawTask(
             // 暗面：随左右翻转移动
             drawCircle(
                 Brush.radialGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.10f + 0.26f * abs(sin(yaw)))),
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.10f + 0.45f * abs(sin(yaw)))),
                     center = Offset(p.x + sin(yaw) * r * 0.9f, p.y - r * 0.1f),
                     radius = r * 1.02f,
                 ),
@@ -1475,8 +1478,8 @@ private fun DrawScope.drawTask(
             // 高光斑：随姿态漂移（光源侧高亮）
             drawCircle(
                 Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = 0.18f), Color.Transparent),
-                    center = Offset(p.x + tilt.y * r * 0.45f, p.y - r * 0.42f - tilt.x * r * 0.15f),
+                    listOf(Color.White.copy(alpha = 0.30f), Color.Transparent),
+                    center = Offset(p.x + tilt.y * r * 0.55f, p.y - r * 0.42f - tilt.x * r * 0.25f),
                     radius = r * 0.85f,
                 ),
                 r, Offset(p.x, p.y),
