@@ -17,6 +17,11 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -107,6 +112,7 @@ import com.mengpolar.dailycheck.data.OrbitUiState
 import com.mengpolar.dailycheck.data.PlanetState
 import com.mengpolar.dailycheck.data.weekdayLabel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.PI
@@ -147,7 +153,7 @@ private class Geo(
     fun dp(v: Float) = v * s
 }
 
-/** 轨道半径序列（px）：单轨道放大；多轨道 150dp 起步、60dp 间距；放不下整体等比缩小 */
+/** 轨道半径序列（px）：单轨道放大；多轨道把可用半径带按可见数量均分（筛选补位后行星更聚拢） */
 private fun orbitRadii(wPx: Float, hPx: Float, d: Float, orbitCount: Int): List<Float> {
     if (orbitCount <= 0 || wPx <= 0f || hPx <= 0f) return emptyList()
     val s = d
@@ -157,12 +163,17 @@ private fun orbitRadii(wPx: Float, hPx: Float, d: Float, orbitCount: Int): List<
     return when {
         orbitCount == 1 -> listOf(cap * 0.60f)
         else -> {
-            val outerDp = 150f + 60f * (orbitCount - 1)
-            val scale = minOf(1f, cap / (outerDp * s))
-            (0 until orbitCount).map { i -> (150f + 60f * i) * scale * s }
+            val inner = cap * 0.32f
+            val outer = cap * 0.72f
+            val step = (outer - inner) / (orbitCount - 1)
+            (0 until orbitCount).map { i -> inner + step * i }
         }
     }
 }
+
+/** 行星尺寸系数：可见数量越少行星越大（配合筛选补位放大） */
+private fun planetScaleFor(orbitCount: Int): Float = if (orbitCount <= 1) 1.35f
+    else (1.30f - 0.10f * (orbitCount - 1)).coerceIn(0.90f, 1.35f)
 
 /** 半径插值：长度不同时以末值补位（新增轨道自上一外圈滑出，移除时滑回补位） */
 private fun lerpRadii(from: List<Float>, to: List<Float>, f: Float): List<Float> {
@@ -178,9 +189,7 @@ private fun lerpRadii(from: List<Float>, to: List<Float>, f: Float): List<Float>
 private fun computeGeo(wPx: Float, hPx: Float, d: Float, orbitCount: Int, tiltQ: Float): Geo {
     val s = d
     val radii = orbitRadii(wPx, hPx, d, orbitCount)
-    val planetScale = if (orbitCount <= 1) 1f
-        else (radii.lastOrNull()?.let { it / ((150f + 60f * (orbitCount - 1)) * s) } ?: 1f).coerceIn(0.62f, 1f)
-    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScale)
+    return Geo(wPx, hPx, wPx / 2f, hPx / 2f, tiltQ.coerceIn(0.16f, 1f), radii, s, planetScale = planetScaleFor(orbitCount))
 }
 
 /** 相机变换：K 为镜头中心（显示在屏幕中央的世界点），camScale 为倍率；camScale=1 且 K=几何中心时为恒等 */
@@ -283,6 +292,21 @@ fun OrbitScreen(
     val zoom = remember { Animatable(0f) }
     // 设备姿态（陀螺仪）：驱动聚焦行星的质感与轻微翻转
     val deviceTilt by rememberTilt()
+    // 上一个 / 下一个行星切换：协程必须存活于聚焦 UI 离开组合之后（退焦中途），
+    // 因此 scope 与函数定义在顶层，而非聚焦条件块内
+    val cycleScope = rememberCoroutineScope()
+    fun cycleFocus(dir: Int) {
+        if (displayItems.size <= 1) return
+        cycleScope.launch {
+            val idx = displayItems.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
+            val next = displayItems[(idx + dir + displayItems.size) % displayItems.size].id
+            // 置空触发 LaunchedEffect 的退焦动画（900ms）；此处直接驱动 zoom 会与之互相取消
+            // 导致本协程在 animateTo 处被打断、无法聚焦下一颗行星——故用延时衔接
+            selectedId = null
+            delay(750)
+            selectedId = next
+        }
+    }
     LaunchedEffect(selectedId) {
         if (selectedId != null) {
             zoom.animateTo(1f, tween(1200, easing = FastOutSlowInEasing))
@@ -404,26 +428,32 @@ fun OrbitScreen(
     var tiltLastUptime by remember { mutableStateOf(0L) }
     var tiltLastQ by remember { mutableFloatStateOf(0.62f) }
 
-    // 轨道布局过渡：任务增删 / 筛选切换 / 盘面缩放时，轨道半径旧→新平滑插值
+    // 轨道布局过渡：任务增删 / 筛选切换 / 盘面缩放时，轨道半径与行星尺寸旧→新平滑插值
     val targetRadii = remember(viewSize, displayItems.size) {
         orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size)
     }
+    val targetScale = remember(displayItems.size) { planetScaleFor(displayItems.size) }
     var settledRadii by remember { mutableStateOf<List<Float>?>(null) }
+    var settledScale by remember { mutableFloatStateOf(1f) }
     var animFrom by remember { mutableStateOf<List<Float>?>(null) }
+    var animFromScale by remember { mutableFloatStateOf(1f) }
     var animTo by remember { mutableStateOf<List<Float>?>(null) }
     val orbitAnim = remember { Animatable(1f) }
-    LaunchedEffect(targetRadii) {
+    LaunchedEffect(targetRadii, targetScale) {
         val from = settledRadii
-        if (from == null || from == targetRadii) {
+        if (from == null || (from == targetRadii && settledScale == targetScale)) {
             settledRadii = targetRadii
+            settledScale = targetScale
             orbitAnim.snapTo(1f)
             return@LaunchedEffect
         }
         animFrom = from
         animTo = targetRadii
+        animFromScale = settledScale
         orbitAnim.snapTo(0f)
         orbitAnim.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
         settledRadii = targetRadii
+        settledScale = targetScale
     }
 
     // 新增行星登场时刻 / 消散残影 / 上一帧可见任务快照
@@ -603,7 +633,9 @@ fun OrbitScreen(
                         val tx = tap.x; val ty = tap.y
                         var best: OrbitTask? = null
                         var bd = 1e9f
-                        displayItems.forEach { t ->
+                        // 聚焦态下其他行星已隐藏：只允许点中当前行星（点击=退焦），避免瞬跳到隐藏行星
+                        val candidates = if (zoom.value > 0.5f) selNow?.let { listOf(it) } ?: emptyList() else displayItems
+                        candidates.forEach { t ->
                             val p = planetPos(g, t)
                             val dist = hypot((tx - p.x).toDouble(), (ty - p.y).toDouble()).toFloat()
                             if (dist < p.r + 30f * screenDensity && dist < bd) { bd = dist; best = t }
@@ -625,7 +657,7 @@ fun OrbitScreen(
                 Geo(
                     g0raw.w, g0raw.h, g0raw.cx, g0raw.cy, g0raw.q,
                     lerpRadii(animFrom!!, animTo!!, orbitAnim.value), g0raw.s,
-                    planetScale = g0raw.planetScale,
+                    planetScale = animFromScale + (targetScale - animFromScale) * orbitAnim.value,
                 )
             } else g0raw
             val z = zoom.value
@@ -856,7 +888,43 @@ fun OrbitScreen(
                     // 仅占位命中路径挡住点按透传（空 handler 不消费事件，子按钮才能收到按压）
                     .pointerInput(Unit) { }
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 上一个 / 下一个行星（<<< / >>>：无框粗体 + 方向漂移动画；cycleFocus 定义在顶层）
+                val arrowT = rememberInfiniteTransition(label = "arrow")
+                val arrowP by arrowT.animateFloat(
+                    0f, 1f,
+                    infiniteRepeatable(tween(800, easing = LinearEasing), RepeatMode.Reverse),
+                    label = "arrowP",
+                )
+                Column {
+                    Row(Modifier.fillMaxWidth()) {
+                        Box(Modifier.weight(0.8f).height(34.dp), contentAlignment = Alignment.Center) {
+                            Text(
+                                "<<<",
+                                color = TermBlueBright,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier
+                                    .graphicsLayer { translationX = -7f * arrowP }
+                                    .clickable { cycleFocus(-1) },
+                            )
+                        }
+                        Spacer(Modifier.weight(1.4f))
+                        Box(Modifier.weight(0.8f).height(34.dp), contentAlignment = Alignment.Center) {
+                            Text(
+                                ">>>",
+                                color = TermBlueBright,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier
+                                    .graphicsLayer { translationX = 7f * arrowP }
+                                    .clickable { cycleFocus(1) },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(
                         Modifier
                             .weight(0.8f).height(52.dp)
@@ -916,6 +984,7 @@ fun OrbitScreen(
                     ) {
                         Text("历史", color = TermBlue, fontSize = 14.sp, fontFamily = FontFamily.Monospace, letterSpacing = 2.sp)
                     }
+                }
                 }
             }
         }
