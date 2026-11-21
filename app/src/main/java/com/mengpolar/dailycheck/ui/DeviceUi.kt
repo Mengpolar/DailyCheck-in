@@ -102,14 +102,13 @@ internal fun rememberTilt(): State<Tilt> {
             override fun onSensorChanged(e: SensorEvent) {
                 runCatching {
                     SensorManager.getRotationMatrixFromVector(rm, e.values)
-                    // 世界固定光源（左上前方 L=(-0.5,-0.5,0.75)）投影到设备屏幕坐标。
-                    // 不用 pitch/roll 欧拉角：竖屏持机时 pitch 饱和 ±90°、roll 贴万向锁死区，
-                    // 会导致反光/行星质感在真机上不动；矩阵投影在任意姿态下均线性响应。
-                    // 设备轴在世界坐标中的方向 = R 的列（rm 行主序：列0=(rm[0],rm[3],rm[6])…）
-                    val d0 = -0.5f * rm[0] - 0.5f * rm[3] + 0.75f * rm[6] // 光在设备 X（屏幕右）分量
-                    val d1 = -0.5f * rm[1] - 0.5f * rm[4] + 0.75f * rm[7] // 光在设备 Y（屏幕上）分量
-                    val nx = (d0 / 0.9f).coerceIn(-1f, 1f)
-                    val ny = (d1 / 0.9f).coerceIn(-1f, 1f)
+                    // 重力在设备屏幕平面上的投影 gx/gy：转向（方向盘式翻转）与俯仰手势均线性响应、
+                    // 永不饱和。竖屏持机时重力沿 -屏幕Y（gx≈0, gy≈-1）；倾斜时投影在屏幕上扫动。
+                    // （世界固定光源模型对左右翻转手势几乎无响应——旋转的是朝向，d0 仅缩 sinθ，已弃用）
+                    val gx = -rm[6] // 重力沿屏幕右方向：右缘下沉为正
+                    val gy = -rm[7] // 重力沿屏幕上方向：竖屏持机时 ≈ -1
+                    val nx = gx.coerceIn(-1f, 1f)
+                    val ny = gy.coerceIn(-1f, 1f)
                     val cur = tilt.value
                     tilt.value = Tilt(
                         x = cur.x + (ny - cur.x) * 0.4f,
@@ -171,9 +170,9 @@ internal fun DeviceShell(
                     listOf(Color.Black.copy(alpha = 0.10f), Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.10f)),
                 ),
             )
-            // 陀螺仪反光：随姿态漂移的强光斑 + 双高光带（世界固定光源照在银色金属上，光源侧高亮）
-            val cx = size.width * (0.5f + tilt.y * 0.32f)
-            val cy = size.height * (0.40f - tilt.x * 0.28f)
+            // 陀螺仪反光：随姿态漂移的强光斑 + 双高光带（重力投影驱动：翻转向抬起的边缘扫动）
+            val cx = size.width * (0.5f - tilt.y * 0.32f)
+            val cy = size.height * (0.40f + tilt.x * 0.28f)
             drawRect(
                 Brush.radialGradient(
                     listOf(Color.White.copy(alpha = 0.34f), Color.Transparent),

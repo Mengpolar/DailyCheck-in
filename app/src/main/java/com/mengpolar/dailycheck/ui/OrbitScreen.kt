@@ -1420,8 +1420,8 @@ private fun DrawScope.drawTask(
     } + if (sel) 0.3f * z else 0f).coerceIn(0f, 1f)) * se
 
     val bmp = images[t.id]
-    // 聚焦态轻微左右翻转：水平压缩（幅度随陀螺仪；程序星体同样套用）
-    val yaw = tilt.y * 0.6f
+    // 聚焦态轻微左右翻转：水平压缩（重力投影驱动，幅度随方向盘式倾斜；程序星体同样套用）
+    val yaw = (tilt.y * 1.2f).coerceIn(-0.9f, 0.9f)
     val halfW = if (sel) r * cos(yaw) else r
     if (bmp != null) {
         val paint = if (done) planetPaintNormal else planetPaintGray
@@ -1462,39 +1462,41 @@ private fun DrawScope.drawTask(
             }
         }
     }
-    // 聚焦态陀螺仪质感：随姿态偏移的球面暗面 + 高光斑（与设备面板反光同源）
+    // 聚焦态陀螺仪质感：重力投影驱动——暗面移向背光侧、高光斑移向抬起的边缘（与面板反光同源）
     if (sel) {
-        val sphere = Path().apply { addOval(Rect(p.x - r, p.y - r, p.x + r, p.y + r)) }
+        val sphere = Path().apply { addOval(Rect(p.x - halfW, p.y - r, p.x + halfW, p.y + r)) }
         clipPath(sphere) {
             // 暗面：随左右翻转移动
             drawCircle(
                 Brush.radialGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.10f + 0.45f * abs(sin(yaw)))),
-                    center = Offset(p.x + sin(yaw) * r * 0.9f, p.y - r * 0.1f),
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.12f + 0.50f * abs(tilt.y))),
+                    center = Offset(p.x - tilt.y * r * 0.9f, p.y - r * 0.1f),
                     radius = r * 1.02f,
                 ),
                 r, Offset(p.x, p.y),
             )
-            // 高光斑：随姿态漂移（光源侧高亮）
+            // 高光斑：随姿态漂移（移向抬起的边缘）
             drawCircle(
                 Brush.radialGradient(
-                    listOf(Color.White.copy(alpha = 0.30f), Color.Transparent),
-                    center = Offset(p.x + tilt.y * r * 0.55f, p.y - r * 0.42f - tilt.x * r * 0.25f),
-                    radius = r * 0.85f,
+                    listOf(Color.White.copy(alpha = 0.32f), Color.Transparent),
+                    center = Offset(p.x - tilt.y * r * 0.75f, p.y - r * 0.45f + tilt.x * r * 0.30f),
+                    radius = r * 0.9f,
                 ),
                 r, Offset(p.x, p.y),
             )
         }
     }
-    // 液态玻璃质感：球面暗角 + 边缘亮环（随行星整体透明度淡出——聚焦时其他行星彻底隐藏）
-    drawCircle(
-        Brush.radialGradient(
-            listOf(Color(0x00000000), Color(0x59000000).copy(alpha = 0x59 / 255f * alpha)),
-            center = Offset(p.x, p.y), radius = r,
-        ),
-        r, Offset(p.x, p.y),
-    )
-    drawCircle(Color(0x59FFFFFF).copy(alpha = 0x59 / 255f * alpha), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
+    // 液态玻璃质感（球面暗角 + 边缘亮环随翻转一起水平压缩，行星整体透明度淡出）
+    scale(halfW / r.coerceAtLeast(1f), 1f, pivot = Offset(p.x, p.y)) {
+        drawCircle(
+            Brush.radialGradient(
+                listOf(Color(0x00000000), Color(0x59000000).copy(alpha = 0x59 / 255f * alpha)),
+                center = Offset(p.x, p.y), radius = r,
+            ),
+            r, Offset(p.x, p.y),
+        )
+        drawCircle(Color(0x59FFFFFF).copy(alpha = 0x59 / 255f * alpha), r, Offset(p.x, p.y), style = Stroke(1.1f * g.s))
+    }
 
     // 删除长按裂纹：polie 碎裂贴图固定贴合行星，随进度以行星中心为圆心向外扩散揭示（裂纹蔓延感）
     if (sel && delFill > 0f && r > 10f && crackTex != null) {
