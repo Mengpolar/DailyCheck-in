@@ -50,6 +50,10 @@ data class OrbitTask(
     val darkIndex: Int = 0,
     /** 暗星已过期天数（非暗星为 0） */
     val expiredDays: Int = 0,
+    /** 已完成的一次性任务过期后安息于星海：固定位置、不随轨道转动 */
+    val seaStar: Boolean = false,
+    /** 星海序位（按 id 排序后的稳定下标，驱动安息位散布） */
+    val seaIndex: Int = 0,
 )
 
 data class OrbitUiState(
@@ -127,9 +131,10 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
             val done = state == PlanetState.DONE
             val window = task.periodWindow(nowMs)
             val records = d.records.filter { it.taskId == task.id }
-            // 一次性任务过期且从未扫描 → 暗星（不再是有轨行星）
+            // 一次性任务过期：已扫描 → 安息于星海（固定位置）；从未扫描 → 暗星（盘外停靠）
+            val sea = task.intervalDays <= 0 && done && window.endMs < nowMs
             val dark = task.intervalDays <= 0 && !done && window.endMs < nowMs
-            val tail = if (!dark && done && lastMs != null) {
+            val tail = if (!dark && !sea && done && lastMs != null) {
                 (1f - ((nowMs - lastMs).toFloat() / window.durMs).coerceIn(0f, 1f)) * 0.3f + 0.05f
             } else 0f
             val cycleDayX = if (task.intervalDays <= 0) 0
@@ -157,12 +162,18 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 retroAvailable = retroAvailable,
                 darkStar = dark,
                 expiredDays = if (dark) (((nowMs - window.endMs) / 86_400_000L) + 1).toInt() else 0,
+                seaStar = sea,
             )
         }
         var ring = 0
         var darkIdx = 0
+        var seaIdx = 0
         val items = built.map { t ->
-            if (t.darkStar) t.copy(darkIndex = darkIdx++) else t.copy(ring = ring++)
+            when {
+                t.darkStar -> t.copy(darkIndex = darkIdx++)
+                t.seaStar -> t.copy(seaIndex = seaIdx++)
+                else -> t.copy(ring = ring++)
+            }
         }
         return OrbitUiState(today = today, items = items)
     }
@@ -218,10 +229,17 @@ class TaskViewModel(application: Application) : AndroidViewModel(application) {
                 note = note.trim(),
                 intervalDays = interval,
                 anchorMin = anchorMin.coerceIn(0, 1439),
-                createdEpochDay = if (once) today else today - x,
+                // 同新建：今天已是周期第 X 天 → 周期始于 X-1 天前
+                createdEpochDay = if (once) today else today - (x - 1),
                 onceDays = if (once) onceDays.coerceIn(0, 36500) else 0,
             )
         )
+        refresh()
+    }
+
+    /** 行星列表拖动排序：新顺序持久化，轨道环序随之重排 */
+    fun reorderTasks(orderedIds: List<Long>) {
+        repo.reorderTasks(orderedIds)
         refresh()
     }
 

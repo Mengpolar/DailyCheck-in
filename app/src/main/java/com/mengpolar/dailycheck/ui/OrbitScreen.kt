@@ -9,6 +9,8 @@ import com.mengpolar.dailycheck.R
 import android.hardware.Sensor
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.VibrationEffect
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -112,6 +114,7 @@ fun OrbitScreen(
     onEdit: (Long) -> Unit,
     onDeleteTask: (Long) -> Unit,
     onReconstruct: (Long) -> Unit,
+    onReorderTasks: (List<Long>) -> Unit,
 ) {
     val context = LocalContext.current
     val screenDensity = LocalDensity.current.density
@@ -122,8 +125,10 @@ fun OrbitScreen(
     var filterMode by remember { mutableIntStateOf(0) }
     // 暗星（过期一次性任务）：无轨道停靠在盘外空白区，不参与轨道布局与筛选
     val darkStars = remember(state.items) { state.items.filter { it.darkStar } }
+    // 星海（已完成的一次性任务过期后安息）：固定位置、不随轨道转动，可在星海界面聚焦
+    val seaStars = remember(state.items) { state.items.filter { it.seaStar } }
     // 按筛选模式取可见任务；显示环序按可见集合重排（隐藏/恢复时轨道补位让位）
-    val orbitTasks = remember(state.items) { state.items.filterNot { it.darkStar } }
+    val orbitTasks = remember(state.items) { state.items.filterNot { it.darkStar || it.seaStar } }
     val visibleTasks = remember(orbitTasks, filterMode) {
         when (filterMode) {
             1 -> orbitTasks.filter { it.state != PlanetState.DONE }
@@ -134,9 +139,13 @@ fun OrbitScreen(
     val displayItems = remember(visibleTasks) {
         visibleTasks.mapIndexed { i, t -> t.copy(ring = i) }
     }
-    // 选中任务按显示集取（筛选重排环序后，镜头/命中须与绘制一致）；暗星可被聚焦
+    // 选中任务按显示集取（筛选重排环序后，镜头/命中须与绘制一致）；暗星/星海行星可被聚焦
     val selected = displayItems.firstOrNull { it.id == selectedId }
         ?: darkStars.firstOrNull { it.id == selectedId }
+        ?: seaStars.firstOrNull { it.id == selectedId }
+    // 星海界面模式 / 行星名录弹层
+    var seaMode by remember { mutableStateOf(false) }
+    var showList by remember { mutableStateOf(false) }
     // 相机锚点任务：退焦后 selected 变 null，镜头仍需围绕最后选中的行星缩小（动画期间保持锚点不丢）
     var recentSelected by remember { mutableStateOf<OrbitTask?>(null) }
     if (selected != null) {
@@ -161,8 +170,8 @@ fun OrbitScreen(
     // 因此 scope 与函数定义在顶层，而非聚焦条件块内
     val cycleScope = rememberCoroutineScope()
     fun cycleFocus(dir: Int) {
-        // 切换序列：轨道行星 + 暗星（暗星排在行星之后）
-        val cycleList = displayItems + darkStars
+        // 切换序列：星海模式内循环星海行星；星轨模式为轨道行星 + 暗星
+        val cycleList = if (seaMode) seaStars else displayItems + darkStars
         if (cycleList.size <= 1) return
         cycleScope.launch {
             val idx = cycleList.indexOfFirst { it.id == selectedId }.takeIf { it >= 0 } ?: 0
@@ -180,6 +189,19 @@ fun OrbitScreen(
         } else {
             zoom.animateTo(0f, tween(900, easing = FastOutSlowInEasing))
         }
+    }
+    // 星海界面：系统返回键 = 返回星轨
+    BackHandler(enabled = seaMode) {
+        selectedId = null
+        seaMode = false
+    }
+    // 聚焦目标被筛选移除（如「未完成」筛选下扫描完成即被过滤）→ 自动退焦，避免空白聚焦页
+    LaunchedEffect(displayItems, darkStars, seaMode) {
+        if (seaMode) return@LaunchedEffect
+        if (selectedId != null &&
+            displayItems.none { it.id == selectedId } &&
+            darkStars.none { it.id == selectedId }
+        ) selectedId = null
     }
 
     // 倾斜视差：加速度计求得手机倾角（竖屏左右倾斜 → 左右偏移），低通平滑后驱动星空轻移
@@ -327,6 +349,11 @@ fun OrbitScreen(
     val swallowIds = remember { mutableStateListOf<Long>() }
     var prevDisplay by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
     var prevDark by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
+    var prevSea by remember { mutableStateOf<List<OrbitTask>>(emptyList()) }
+    // 拖动排序过渡：环序变化的行星从旧环半径平滑滑向新环（无消散/登场动画）
+    var skipDiffOnce by remember { mutableStateOf(false) }
+    var ringFromMap by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+    val ringLerp = remember { Animatable(1f) }
     LaunchedEffect(state.items) {
         // 选中任务被删除时自动退焦，避免聚焦卡引用已移除任务
         val ids = state.items.map { it.id }.toSet()
@@ -354,6 +381,29 @@ fun OrbitScreen(
             }
             swallowIds.removeAll(gone.map { it.id })
         }
+        // 拖动排序路径：跳过消散/登场，改为旧环→新环的半径插值
+        if (skipDiffOnce) {
+            skipDiffOnce = false
+            prevDisplay = displayItems
+            if (viewSize != IntSize.Zero) {
+                val base = orbitRadii(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size)
+                val prevRingById = prevDisplay.associate { it.id to it.ring }
+                val changed = displayItems.filter { prevRingById[it.id] != null && prevRingById[it.id] != it.ring }
+                if (changed.isNotEmpty()) {
+                    ringFromMap = changed.mapNotNull { t ->
+                        val from = base.getOrNull(prevRingById[t.id] ?: -1) ?: return@mapNotNull null
+                        t.id to from
+                    }.toMap()
+                    ringLerp.snapTo(0f)
+                    try {
+                        ringLerp.animateTo(1f, tween(680, easing = FastOutSlowInEasing))
+                    } finally {
+                        ringFromMap = emptyMap()
+                    }
+                }
+            }
+            return@LaunchedEffect
+        }
         prevDisplay = displayItems
     }
     // 暗星登场 / 被吞噬：与轨道行星的 diff 分开观察（暗星不在 displayItems 中）
@@ -371,6 +421,31 @@ fun OrbitScreen(
             swallowIds.removeAll(gone.map { it.id })
         }
         prevDark = darkStars
+    }
+    // 星海登场 / 被吞噬 / 被改造召回（召回时退出星海界面，回星轨观看行星重新入轨）
+    LaunchedEffect(seaStars) {
+        val nowMs = withFrameNanos { it } / 1_000_000
+        val added = seaStars.filter { ss -> prevSea.none { it.id == ss.id } }
+        if (added.isNotEmpty()) {
+            spawnedAt = spawnedAt + added.associate { it.id to nowMs }
+        }
+        val gone = prevSea.filter { ss -> seaStars.none { it.id == ss.id } }
+        if (gone.isNotEmpty()) {
+            swallowGhosts = swallowGhosts + gone.filter { it.id in swallowIds }.map { t ->
+                SwallowGhost(
+                    id = t.id, ring = -1, frac = 0f, hue = t.hue,
+                    darkStar = false, darkIndex = 0, seaStar = true, seaIndex = t.seaIndex, born = nowMs,
+                )
+            }
+            swallowIds.removeAll(gone.map { it.id })
+        }
+        prevSea = seaStars
+    }
+    LaunchedEffect(seaMode, seaStars) {
+        if (seaMode && selectedId != null && seaStars.none { it.id == selectedId }) {
+            selectedId = null
+            seaMode = false
+        }
     }
 
     // 拖尾星光粒子：已完成行星的彗尾上随机生成，向拖尾末端漂移并渐隐
@@ -417,6 +492,15 @@ fun OrbitScreen(
     var delDown by remember { mutableStateOf(false) }
     val delProgress = remember { mutableFloatStateOf(0f) }
     val haptic = LocalHapticFeedback.current
+    // 完成振动：长按扫描/回溯扫描达成时的一下明确震感（叠加轻触反馈）
+    val vibrator = remember {
+        runCatching { context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator }.getOrNull()
+    }
+    val completeBuzz: () -> Unit = {
+        runCatching {
+            vibrator?.vibrate(VibrationEffect.createOneShot(200, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
     LaunchedEffect(selectedId) {
         holdDown = false
         holdProgress.floatValue = 0f
@@ -441,6 +525,7 @@ fun OrbitScreen(
                 holdDown = false
                 holdProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                completeBuzz()
                 if (task.darkStar) {
                     selectedId = null // 重构：先退焦，暗星随之恢复为正常轨道行星
                     onReconstruct(task.id)
@@ -452,6 +537,7 @@ fun OrbitScreen(
                 retroDown = false
                 retroProgress.floatValue = 0f
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                completeBuzz()
                 onRetroScan(task.id)
             }
             if (delDown && delProgress.floatValue >= CHECK_HOLD_S) {
@@ -473,11 +559,13 @@ fun OrbitScreen(
         Canvas(
             Modifier
                 .fillMaxSize()
-                .pointerInput(Unit) {
+                .pointerInput(seaMode) {
                     // 空白区上下滑动：轨道盘绕 X 轴倾角（中心固定）；松手惯性滑行后吸附档位
+                    // 星海界面无轨道盘，禁用倾角手势
                     detectVerticalDragGestures(
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
+                            if (seaMode) return@detectVerticalDragGestures
                             val target = (tiltAnim.value - dragAmount / 550f).coerceIn(0.16f, 1f)
                             val nowMs = System.nanoTime() / 1_000_000L
                             val dt = (nowMs - tiltLastUptime).coerceAtLeast(1L)
@@ -512,14 +600,24 @@ fun OrbitScreen(
                         },
                     )
                 }
-                .pointerInput(displayItems, viewSize) {
+                .pointerInput(displayItems, viewSize, seaMode) {
                     detectTapGestures { tap ->
                         if (viewSize == IntSize.Zero) return@detectTapGestures
-                        val g0 = computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size, tiltAnim.value)
+                        val g0 = if (seaMode) {
+                            // 星海：无轨道几何，行星位于固定安息位
+                            Geo(
+                                viewSize.width.toFloat(), viewSize.height.toFloat(),
+                                viewSize.width / 2f, viewSize.height / 2f, 1f, emptyList(), screenDensity,
+                                planetScale = planetScaleFor(seaStars.size, viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity),
+                            )
+                        } else {
+                            computeGeo(viewSize.width.toFloat(), viewSize.height.toFloat(), screenDensity, displayItems.size, tiltAnim.value)
+                        }
                         // 相机状态与绘制一致（行星先原地放大、中后段滑向屏心）。
                         // 注意：pointerInput 的闭包可能持有旧组合的 selected，这里按 selectedId 现取，保证命中测试与绘制一致
                         val selNow = displayItems.firstOrNull { it.id == selectedId }
-                            ?: darkStars.firstOrNull { it.id == selectedId } ?: recentSelected
+                            ?: darkStars.firstOrNull { it.id == selectedId }
+                            ?: seaStars.firstOrNull { it.id == selectedId } ?: recentSelected
                         var camScale = 1f
                         var kx = g0.cx; var ky = g0.cy
                         if (selNow != null) {
@@ -540,7 +638,8 @@ fun OrbitScreen(
                         var best: OrbitTask? = null
                         var bd = 1e9f
                         // 聚焦态下其他行星已隐藏：只允许点中当前目标（点击=退焦），避免瞬跳到隐藏行星
-                        val candidates = if (zoom.value > 0.5f) selNow?.let { listOf(it) } ?: emptyList() else displayItems + darkStars
+                        val candidates = if (zoom.value > 0.5f) selNow?.let { listOf(it) } ?: emptyList()
+                        else if (seaMode) seaStars else displayItems + darkStars
                         candidates.forEach { t ->
                             val p = planetPos(g, t)
                             val dist = hypot((tx - p.x).toDouble(), (ty - p.y).toDouble()).toFloat()
@@ -557,15 +656,29 @@ fun OrbitScreen(
                 }
         ) {
             val d = this.density
-            val g0raw = computeGeo(size.width, size.height, d, displayItems.size, tiltAnim.value)
+            val g0raw = if (seaMode) {
+                // 星海：无轨道几何，行星位于固定安息位
+                Geo(
+                    size.width, size.height, size.width / 2f, size.height / 2f, 1f, emptyList(), d,
+                    planetScale = planetScaleFor(seaStars.size, size.width, size.height, d),
+                )
+            } else computeGeo(size.width, size.height, d, displayItems.size, tiltAnim.value)
             // 布局过渡中：以插值半径重排几何（新增轨道滑出 / 移除补位）
-            val g0 = if (orbitAnim.value < 1f && animFrom != null && animTo != null) {
+            val g0 = if (!seaMode && orbitAnim.value < 1f && animFrom != null && animTo != null) {
                 Geo(
                     g0raw.w, g0raw.h, g0raw.cx, g0raw.cy, g0raw.q,
                     lerpRadii(animFrom!!, animTo!!, orbitAnim.value), g0raw.s,
                     planetScale = animFromScale + (targetScale - animFromScale) * orbitAnim.value,
                 )
             } else g0raw
+            // 拖动排序过渡中：行星半径从旧环滑向新环
+            val ringLerpV = ringLerp.value
+            val orbitRadius: (OrbitTask) -> Float? = { t ->
+                ringFromMap[t.id]?.let { from ->
+                    val to = g0.radiiPx.getOrElse(t.ring) { g0.radiiPx.lastOrNull() ?: 0f }
+                    from + (to - from) * ringLerpV
+                }
+            }
             val z = zoom.value
             // 相机：行星先原地放大（前 40% 行程），随后在放大过程中缓缓滑向屏幕中心；
             // 落定时行星居中且直径≈屏宽。退焦沿同一曲线反向（先滑回轨道位置、再原地缩小）。
@@ -624,11 +737,13 @@ fun OrbitScreen(
                 val starShift = Offset((g0.cx - kx) * 0.25f * z, (g0.cy - ky) * 0.25f * z)
                 drawStars(g0, stars, timeMs, Offset(parallax.x * 1.3f + starShift.x, parallax.y * 1.3f + starShift.y), (1f - 0.55f * z).coerceIn(0.15f, 1f), sparkStar)
 
-                // 星系层：轨道半径已含相机缩放（轨道线弱化，仅作存在暗示）
+                // 星系层：轨道半径已含相机缩放（轨道线弱化，仅作存在暗示）；星海模式无轨道
                 drawOrbitLayer(g)
                 // 退焦动画期间（zoom 未归零）沿用最近选中继续暗化其他行星，实现逐渐恢复
                 val dimRef = selected ?: recentSelected.takeIf { zoom.value > 0.05f }
-                displayItems.sortedBy { planetPos(g, it).nearness }.forEach { t ->
+                // 星海模式渲染安息行星；星轨模式渲染轨道行星（含排序半径插值）
+                val renderItems = if (seaMode) seaStars else displayItems
+                renderItems.sortedBy { planetPos(g, it, orbitRadius(it)).nearness }.forEach { t ->
                     drawTask(
                         g, t, timeMs, z, selected, planetImages,
                         tilt = deviceTilt,
@@ -640,10 +755,11 @@ fun OrbitScreen(
                             (delProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
                         fill = if (selected?.id == t.id && selected.state != PlanetState.DONE)
                             (holdProgress.floatValue / CHECK_HOLD_S).coerceIn(0f, 1f) else 0f,
+                        radiusOverride = orbitRadius(t),
                     )
                 }
-                // 暗星（盘外停靠的过期一次性任务）：在轨道行星之上绘制
-                darkStars.forEach { ds ->
+                // 暗星（盘外停靠的过期一次性任务）：在轨道行星之上绘制（星海模式下不渲染）
+                if (!seaMode) darkStars.forEach { ds ->
                     drawDarkStar(
                         g, ds, timeMs, selected,
                         showName = showPlanetNames,
@@ -680,8 +796,8 @@ fun OrbitScreen(
                 // 吞噬残影：删除的任务螺旋坠入盘心（暗星原地塌缩），终点黑洞闪现
                 swallowGhosts.forEach { drawSwallowGhost(g, it, timeMs) }
 
-                // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐（仅当前可见行星）
-                drawTailStars(g, displayItems, tailStars, timeMs, sparkStar)
+                // 拖尾星光粒子：沿轨道向拖尾末端漂移、渐隐（星海行星无拖尾）
+                drawTailStars(g, if (seaMode) emptyList() else displayItems, tailStars, timeMs, sparkStar)
 
                 // 点击星光（最上层）
                 drawSparks(g, sparks, timeMs, sparkStar)
@@ -747,7 +863,8 @@ fun OrbitScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (t.darkStar) "已于 ${formatWindowStart(t.periodEndMs)} 到期 · 沉寂 ${t.expiredDays} 天"
+                            if (t.seaStar) "已安息于星海 · 固定坐标 ${t.seaIndex + 1}"
+                            else if (t.darkStar) "已于 ${formatWindowStart(t.periodEndMs)} 到期 · 沉寂 ${t.expiredDays} 天"
                             else if (remainingMs > 0L) "本周期还剩 ${formatRemaining(remainingMs)}" else "本周期已结束 · 即将重置",
                             color = remainColor, fontSize = 13.sp, fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
                         )
@@ -979,9 +1096,68 @@ fun OrbitScreen(
             }
         }
 
-        // 底部弧形导航：上滑展开 筛选/添加/设置，下滑收起；聚焦时随镜头淡出并停用触摸
+        // 星海界面标识与返回（聚焦时随镜头淡出）
+        if (seaMode) {
+            Row(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 40.dp)
+                    .graphicsLayer { alpha = (1f - zoom.value).coerceIn(0f, 1f) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    "星海 · ${seaStars.size} 颗安息的行星",
+                    color = TermBlueDim, fontSize = 13.sp, fontFamily = FontFamily.Monospace, letterSpacing = 3.sp,
+                )
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(BtnBg)
+                        .border(1.dp, TermBlueDim.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                        .clickable {
+                            selectedId = null
+                            seaMode = false
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                ) {
+                    Text(
+                        "[ 返回星轨 ]",
+                        color = TermBlue, fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+                    )
+                }
+            }
+        }
+
+        // 行星名录弹层：卡片列表 + 左侧手柄拖动排序 + 星海入口
+        if (showList) {
+            PlanetListSheet(
+                items = orbitTasks,
+                seaStars = seaStars,
+                onReorder = { ids ->
+                    skipDiffOnce = true
+                    onReorderTasks(ids)
+                },
+                onOpenPlanet = { id ->
+                    showList = false
+                    filterMode = 0 // 目标行星可能被筛选隐藏：重置筛选保证可见
+                    selectedId = id
+                    if (arcTarget > 0.5f) arcTarget = 0f
+                },
+                onOpenSea = {
+                    showList = false
+                    selectedId = null
+                    seaMode = true
+                },
+                onDismiss = { showList = false },
+            )
+        }
+
+        // 底部弧形导航：上滑展开 列表/筛选/添加/设置，下滑收起；聚焦与星海模式随镜头淡出并停用触摸
         ArcNavBar(
             onAdd = onAdd,
+            onOpenList = { showList = true },
             onOpenSettings = onOpenSettings,
             filterIcon = when (filterMode) {
                 1 -> R.drawable.ic_filter_unfinished
@@ -991,7 +1167,7 @@ fun OrbitScreen(
             onFilterCycle = { filterMode = (filterMode + 1) % 3 },
             moonImage = moonImage,
             timeMs = timeMs,
-            dim = zoom.value,
+            dim = if (seaMode) 1f else zoom.value,
             target = arcTarget,
             onTargetChange = { arcTarget = it },
             modifier = Modifier.align(Alignment.BottomCenter),

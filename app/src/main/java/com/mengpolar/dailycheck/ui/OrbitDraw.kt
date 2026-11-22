@@ -285,8 +285,9 @@ internal fun DrawScope.drawTask(
     fill: Float,
     delFill: Float,
     spawn: Float,
+    radiusOverride: Float? = null,
 ) {
-    val p = planetPos(g, t)
+    val p = planetPos(g, t, radiusOverride)
     val aDeg = Math.toDegrees(planetAngle(t.frac).toDouble()).toFloat()
     // 新行星登场：0.55→1.0 放大浮现（先快后慢）
     val se = spawn * spawn * (3f - 2f * spawn)
@@ -683,7 +684,7 @@ internal fun DrawScope.drawDarkStar(
 
 // ───────────────────────── 吞噬残影（删除任务的螺旋坠落） ─────────────────────────
 
-/** 被吞噬中的任务残影：有轨行星螺旋坠入盘心，暗星原地塌缩 */
+/** 被吞噬中的任务残影：有轨行星螺旋坠入盘心，暗星/星海行星原地塌缩 */
 internal data class SwallowGhost(
     val id: Long,
     val ring: Int,
@@ -691,6 +692,8 @@ internal data class SwallowGhost(
     val hue: Int,
     val darkStar: Boolean,
     val darkIndex: Int,
+    val seaStar: Boolean = false,
+    val seaIndex: Int = 0,
     val born: Long,
 )
 
@@ -699,8 +702,9 @@ internal fun DrawScope.drawSwallowGhost(g: Geo, ghost: SwallowGhost, timeMs: Lon
     if (t >= 1f) return
     val p0: Offset
     val r0: Float
-    if (ghost.darkStar) {
-        val pp = darkStarPos(g, ghost.id, ghost.darkIndex)
+    if (ghost.darkStar || ghost.seaStar) {
+        val pp = if (ghost.darkStar) darkStarPos(g, ghost.id, ghost.darkIndex)
+                 else seaPos(g, ghost.id, ghost.seaIndex)
         p0 = Offset(pp.x, pp.y)
         r0 = pp.r
     } else {

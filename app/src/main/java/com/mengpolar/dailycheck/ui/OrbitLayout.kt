@@ -92,12 +92,16 @@ internal fun planetAngle(frac: Float) = frac * 2f * Math.PI.toFloat()
 
 internal class PlanetPos(val x: Float, val y: Float, val nearness: Float, val r: Float)
 
-internal fun planetPos(g: Geo, t: OrbitTask): PlanetPos {
+internal fun planetPos(g: Geo, t: OrbitTask, radiusOverride: Float? = null): PlanetPos {
+    // 星海行星：固定安息位，不随轨道转动
+    if (t.seaStar) return seaPos(g, t.id, t.seaIndex)
     // 暗星不在轨道上：直接返回其停靠位
     if (t.darkStar) return darkStarPos(g, t.id, t.darkIndex)
     val a = planetAngle(t.frac)
-    // 布局过渡帧可能存在半径表短暂滞后，越界时回退到最外圈，避免绘制崩溃
-    val R = g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
+    // 布局过渡帧可能存在半径表短暂滞后，越界时回退到最外圈，避免绘制崩溃；
+    // 排序过渡时传入插值半径（旧环半径 → 新环半径）
+    val R = radiusOverride
+        ?: g.radiiPx.getOrElse(t.ring) { g.radiiPx.lastOrNull() ?: 0f }
     val x = g.cx + sin(a) * R
     val y = g.cy - cos(a) * R * g.q
     val nearness = (1f - cos(a)) / 2f
@@ -129,6 +133,28 @@ internal fun darkStarPos(g: Geo, id: Long, index: Int): PlanetPos {
     val y = ((fy + jy) * g.h + dy).coerceIn(44f * s, g.h - 160f * s)
     val r = 11f * g.planetScale * s * g.zoom * (0.92f + 0.08f * sin(id.toFloat() + index))
     return PlanetPos(x, y, 0.5f, r)
+}
+
+/**
+ * 星海安息位：已完成一次性任务的行星长眠于此——固定位置、不随轨道转动。
+ * 全屏 4×3 网格槽位 + 按 id 确定性扰动散布，每次进入位置稳定。
+ */
+internal fun seaPos(g: Geo, id: Long, index: Int): PlanetPos {
+    val s = g.s
+    val rnd = Random(id * 17 + 3)
+    val cols = 4; val rows = 3
+    val slot = Math.abs((id + index * 5L).toInt()) % (cols * rows)
+    val fx = (slot % cols + 0.5f) / cols
+    val fy = (slot / cols + 0.5f) / rows
+    val jx = (rnd.nextFloat() - 0.5f) * 0.10f
+    val jy = (rnd.nextFloat() - 0.5f) * 0.08f
+    val dx = index * 13f * s
+    val dy = (index % 2) * 11f * s
+    val x = ((fx + jx) * g.w + dx).coerceIn(34f * s, g.w - 34f * s)
+    val y = ((fy + jy) * g.h + dy).coerceIn(60f * s, g.h - 170f * s)
+    val nearness = 0.5f
+    val r = 18f * g.planetScale * s * g.zoom * (0.85f + 0.35f * nearness)
+    return PlanetPos(x, y, nearness, r)
 }
 
 internal fun hsla(hue: Int, sat: Float, light: Float, alpha: Float) =

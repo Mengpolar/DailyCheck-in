@@ -78,8 +78,9 @@ class TaskRepository private constructor(private val context: Context) {
 
     /**
      * 新建任务。
-     * 重复任务（intervalDays ≥ 1）：cycleDayX =「当前第 X 天」(1..N)，换算
-     * createdEpochDay = 今天 - X，使下个周期恰好在 (N-X) 天后的 anchorMin 时刻到来。
+     * 重复任务（intervalDays ≥ 1）：cycleDayX =「当前第 X 天」(1..N)，即今天已是周期第 X 天，
+     * 周期始于 X-1 天前 → createdEpochDay = 今天 - (X-1)。
+     * （历史版本误用 今天-X，导致第 N 天创建时窗口已翻入下一周期）
      * 一次性任务（intervalDays = 0）：onceDays = 还有 N 天，截止 = 今天 + N 天的 anchorMin 时刻。
      */
     fun addTask(
@@ -97,7 +98,7 @@ class TaskRepository private constructor(private val context: Context) {
             note = note.trim(),
             intervalDays = interval,
             anchorMin = anchorMin.coerceIn(0, 1439),
-            createdEpochDay = if (once) today else today - x,
+            createdEpochDay = if (once) today else today - (x - 1),
             onceDays = if (once) onceDays.coerceIn(0, 36500) else 0,
         )
         if (image != null) {
@@ -107,6 +108,21 @@ class TaskRepository private constructor(private val context: Context) {
         data = data.copy(tasks = data.tasks + task, nextTaskId = data.nextTaskId + 1)
         persist()
         task
+    }
+
+    /**
+     * 重排任务（行星列表拖动排序）：data.tasks 列表顺序即轨道环序（内→外）。
+     * orderedIds 允许是子集（如星海行星不参与排序）：给定 id 之间按新顺序排列，
+     * 未给出的任务保持在各自原位置不变。
+     */
+    fun reorderTasks(orderedIds: List<Long>) = synchronized(lock) {
+        val seq = orderedIds.mapNotNull { id -> data.tasks.firstOrNull { it.id == id } }
+        if (seq.size != orderedIds.size || seq.size < 2) return@synchronized
+        val ids = orderedIds.toSet()
+        var qi = 0
+        val reordered = data.tasks.map { t -> if (t.id in ids) seq[qi++] else t }
+        data = data.copy(tasks = reordered)
+        persist()
     }
 
     fun updateTask(task: Task) = synchronized(lock) {

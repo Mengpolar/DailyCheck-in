@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 长按扫描完成时的完成振动 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 应用内更新：下载 APK 后发起安装（Android 8+ 需用户在系统设置中允许） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 行星图片：读取相册（Android 13+ 为 READ_MEDIA_IMAGES，旧系统为存储权限） -->

@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun ArcNavBar(
     onAdd: () -> Unit,
+    onOpenList: () -> Unit,
     onOpenSettings: () -> Unit,
     filterIcon: Int,
     onFilterCycle: () -> Unit,
@@ -160,10 +161,11 @@ internal fun ArcNavBar(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = (6.dp + 18.dp * progress))
                     .graphicsLayer { alpha = progress; translationY = (1f - progress) * 40f },
-                horizontalArrangement = Arrangement.spacedBy(44.dp),
+                horizontalArrangement = Arrangement.spacedBy(26.dp),
             ) {
                 listOf(
                     Triple("筛选", filterIcon, onFilterCycle),
+                    Triple("列表", R.drawable.ic_list_btn, onOpenList),
                     Triple("添加", R.drawable.ic_star_add, onAdd),
                     Triple("设置", R.drawable.ic_setting_btn, onOpenSettings),
                 ).forEach { (label, iconRes, onClick) ->

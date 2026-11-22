@@ -97,6 +97,7 @@ private fun App() {
         onEdit = { id -> openEdit(id) },
         onDeleteTask = { taskVm.deleteTask(it) },
         onReconstruct = { taskVm.reconstruct(it) },
+        onReorderTasks = { taskVm.reorderTasks(it) },
     )
 
     if (showSettings) {
