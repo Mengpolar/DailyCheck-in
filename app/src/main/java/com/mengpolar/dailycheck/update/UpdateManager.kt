@@ -2,6 +2,7 @@ package com.mengpolar.dailycheck.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -165,6 +166,26 @@ object UpdateManager {
             b[0] == 'P'.code.toByte() && b[1] == 'K'.code.toByte()
         }
     }.getOrDefault(false)
+
+    /**
+     * 下载的 APK 签名指纹是否与当前安装的应用一致——防更新源被篡改为异签名包
+     * （PK 魔数校验只保证是合法 APK 结构，签名比对才是完整性的最终防线）
+     */
+    fun signatureMatchesInstalled(context: Context, file: File): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        val own = context.packageManager
+            .getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+            .signatures?.firstOrNull()?.toByteArray()?.let(::sha256Hex)
+        @Suppress("DEPRECATION")
+        val downloaded = context.packageManager
+            .getPackageArchiveInfo(file.absolutePath, PackageManager.GET_SIGNATURES)
+            ?.signatures?.firstOrNull()?.toByteArray()?.let(::sha256Hex)
+        own != null && own == downloaded
+    }.getOrDefault(false)
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
 
     /**
      * 多源容错下载：镜像逐一尝试（gh-proxy → ghfast → GitHub 直连）。

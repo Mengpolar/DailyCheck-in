@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -8,6 +10,15 @@ plugins {
 // CI 打 tag 构建时通过环境变量注入版本号（tag: v1.2.3 -> versionName 1.2.3）
 val ciVersion = System.getenv("RELEASE_VERSION")
 val ciVersionCode = System.getenv("RELEASE_CODE")?.toIntOrNull()
+
+// 签名配置：本地读 keystore/signing.properties（git 忽略），
+// CI 读 GitHub Secrets 注入的环境变量；两者皆缺时回退 debug 签名（公开克隆仍可构建）
+val releaseSigning = Properties().apply {
+    val propsFile = rootProject.file("keystore/signing.properties")
+    if (propsFile.exists()) propsFile.inputStream().use { load(it) }
+}
+fun signingProp(key: String, envKey: String): String? =
+    releaseSigning.getProperty(key) ?: System.getenv(envKey)
 
 android {
     namespace = "com.mengpolar.dailycheck"
@@ -23,10 +34,18 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file("keystore/release.keystore")
-            storePassword = "dailycheck2026"
-            keyAlias = "dailycheck"
-            keyPassword = "dailycheck2026"
+            val ksFile = signingProp("storeFile", "RELEASE_KEYSTORE_FILE") ?: "keystore/release.keystore"
+            val ksPass = signingProp("storePassword", "RELEASE_KEYSTORE_PASSWORD")
+            val ksAlias = signingProp("keyAlias", "RELEASE_KEY_ALIAS") ?: "dailycheck"
+            val keyPass = signingProp("keyPassword", "RELEASE_KEY_PASSWORD")
+            if (ksPass != null && keyPass != null && rootProject.file(ksFile).exists()) {
+                storeFile = rootProject.file(ksFile)
+                storePassword = ksPass
+                keyAlias = ksAlias
+                keyPassword = keyPass
+            } else {
+                // 无签名凭据：置空 storeFile，构建时回退 debug 签名（见 buildTypes）
+            }
         }
     }
 
@@ -35,7 +54,10 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (signingConfigs.getByName("release").storeFile != null)
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
     }
 

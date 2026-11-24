@@ -20,3 +20,9 @@ captures/
 .DS_Store
 *.log
 .verify/
+
+# 签名密钥与凭据（泄露轮换后一律不再入库）
+keystore/
+
+# 设计阶段过程资料（仅本地保留）
+design/

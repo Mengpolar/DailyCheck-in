@@ -84,6 +84,16 @@ class UpdateViewModel(application: Application) : AndroidViewModel(application) 
                 UpdateManager.downloadApk(release.apkUrl, file) { p ->
                     _state.value = UpdateState.Downloading(release, p)
                 }
+                // 下载完成先验签名：与当前安装的应用不一致即拒装（更新源可能被篡改）
+                if (!UpdateManager.signatureMatchesInstalled(getApplication(), file)) {
+                    file.delete()
+                    _state.value = UpdateState.Failed(
+                        "更新包签名校验失败，已拒绝安装（更新源可能被篡改）",
+                        UpdateState.Retry.DOWNLOAD,
+                        release,
+                    )
+                    return@launch
+                }
                 _state.value = UpdateState.Ready(release, file)
             } catch (e: CancellationException) {
                 throw e

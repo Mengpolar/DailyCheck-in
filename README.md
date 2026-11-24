@@ -63,8 +63,12 @@ app/src/main/java/com/mengpolar/dailycheck/
 ## 构建与发布
 
 ```bash
-./gradlew assembleRelease          # 本地构建（签名配置见 app/build.gradle.kts）
+./gradlew assembleRelease          # 本地构建：签名凭据读 keystore/signing.properties（git 忽略）
 ```
+
+**签名**：release 密钥库不入库——本地凭据在 `keystore/signing.properties`（storeFile/storePassword/keyAlias/keyPassword），
+CI 凭据在仓库 Secrets（`RELEASE_KEYSTORE_BASE64` / `RELEASE_KEYSTORE_PASSWORD` / `RELEASE_KEY_ALIAS` / `RELEASE_KEY_PASSWORD`），
+两者皆缺时回退 debug 签名（公开克隆仍可构建但不可发布）。应用内更新会校验下载包与已装应用签名一致，异签名包拒装。
 
 版本号由 git tag 自动注入（CI 读取 tag → `versionName`/`versionCode`）：
 
